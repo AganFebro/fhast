@@ -193,6 +193,7 @@ async fn handle_add_download(
     let working_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     let mut headers_vec = json_obj_to_kv_pairs(headers).unwrap_or_default();
+    headers_vec.push(("x-fhast-origin".to_string(), "native-host".to_string()));
     let rh_vec = json_obj_to_kv_pairs(response_headers).unwrap_or_default();
     for (k, v) in rh_vec {
         headers_vec.push((format!("x-fhast-rh:{k}"), v));
