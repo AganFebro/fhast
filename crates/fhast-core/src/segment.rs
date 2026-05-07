@@ -54,16 +54,21 @@ pub fn plan_fixed_segments(
     Ok(segments)
 }
 
-pub fn effective_segment_connections(requested_connections: u16, url: &str) -> u16 {
+pub fn effective_segment_connections(
+    requested_connections: u16,
+    url: &str,
+    global_max: u16,
+    per_host_max: u16,
+) -> u16 {
     let requested = requested_connections.max(1);
-    let global_limited = requested.min(DEFAULT_GLOBAL_MAX_CONNECTIONS);
+    let global_limited = requested.min(global_max);
 
     if Url::parse(url)
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
         .is_some()
     {
-        global_limited.min(DEFAULT_PER_HOST_MAX_CONNECTIONS)
+        global_limited.min(per_host_max)
     } else {
         global_limited
     }
@@ -92,17 +97,20 @@ mod tests {
     #[test]
     fn caps_effective_connections_by_global_and_host_defaults() {
         assert_eq!(
-            super::effective_segment_connections(64, "https://example.com/file"),
+            super::effective_segment_connections(64, "https://example.com/file", 16, 8),
             8
         );
         assert_eq!(
-            super::effective_segment_connections(4, "https://example.com/file"),
+            super::effective_segment_connections(4, "https://example.com/file", 16, 8),
             4
         );
         assert_eq!(
-            super::effective_segment_connections(0, "https://example.com/file"),
+            super::effective_segment_connections(0, "https://example.com/file", 16, 8),
             1
         );
-        assert_eq!(super::effective_segment_connections(64, "not-a-url"), 16);
+        assert_eq!(
+            super::effective_segment_connections(64, "not-a-url", 16, 8),
+            16
+        );
     }
 }

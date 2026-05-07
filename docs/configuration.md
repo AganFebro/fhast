@@ -1,5 +1,39 @@
 # Configuration
 
+## Config File
+
+Persistent config at `~/.config/fhast/config.json`. Created automatically on first `fhast config set`.
+
+```json
+{
+  "max_retries": 5,
+  "max_connections_per_download": 8,
+  "max_connections_global": 16,
+  "max_connections_per_host": 8,
+  "output_dir": null,
+  "sensitive_header_retention": "until_complete"
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `max_retries` | u8 | 5 | Max retry attempts for transient failures |
+| `max_connections_per_download` | u16 | 8 | Segments per download |
+| `max_connections_global` | u16 | 16 | Global connection cap |
+| `max_connections_per_host` | u16 | 8 | Per-domain connection cap |
+| `output_dir` | path\|null | null | Override default output directory |
+| `sensitive_header_retention` | string | `until_complete` | `never`, `until_complete`, or `encrypted` |
+
+## CLI Commands
+
+```bash
+fhast config get                    # Show all config as JSON
+fhast config get max_retries        # Show single key
+fhast config set max_retries 10     # Set a value
+fhast config set output_dir ~/Downloads
+fhast config set sensitive_header_retention never
+```
+
 ## Environment Variables
 
 | Variable | Default | Description |

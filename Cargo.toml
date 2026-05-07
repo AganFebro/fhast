@@ -34,3 +34,4 @@ url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 crossterm = "0.28"
 ratatui = "0.29"
+interprocess = { version = "2", features = ["tokio"] }

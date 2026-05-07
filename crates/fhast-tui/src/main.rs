@@ -8,8 +8,8 @@ use crossterm::{
 };
 use fhast_core::paths;
 use fhast_ipc::{
-    read_message, write_message, DownloadDto, EventDto, IpcRequest, IpcResponse, SegmentDto,
-    IPC_VERSION,
+    connect_to_daemon, read_message, split_stream, write_message, DownloadDto, EventDto,
+    IpcRequest, IpcResponse, SegmentDto, IPC_VERSION,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -19,7 +19,6 @@ use ratatui::{
     Frame, Terminal,
 };
 use tokio::io::BufReader;
-use tokio::net::UnixStream;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -256,10 +255,8 @@ impl App {
                 KeyCode::Esc | KeyCode::Tab => {
                     self.view_mode = ViewMode::Downloads;
                 }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if !self.events.is_empty() {
-                        self.selected_index = (self.selected_index + 1).min(self.events.len() - 1);
-                    }
+                KeyCode::Char('j') | KeyCode::Down if !self.events.is_empty() => {
+                    self.selected_index = (self.selected_index + 1).min(self.events.len() - 1);
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     self.selected_index = self.selected_index.saturating_sub(1);
@@ -460,10 +457,8 @@ impl App {
     }
 
     async fn send_request(&self, request: IpcRequest) -> Result<IpcResponse> {
-        let stream = UnixStream::connect(&self.socket_path)
-            .await
-            .context("connect to daemon")?;
-        let (reader, mut writer) = stream.into_split();
+        let stream = connect_to_daemon(&self.socket_path).await?;
+        let (reader, mut writer) = split_stream(stream);
         let mut reader = BufReader::new(reader);
 
         write_message(&mut writer, &request).await?;

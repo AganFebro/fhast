@@ -5,10 +5,12 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::BufReader;
-use tokio::net::UnixStream;
 
 use fhast_core::paths;
-use fhast_ipc::{read_message, write_message, IpcRequest, IpcResponse, IPC_VERSION};
+use fhast_ipc::{
+    connect_to_daemon, read_message, split_stream, write_message, IpcRequest, IpcResponse,
+    IPC_VERSION,
+};
 
 const MANIFEST_EXTENSION_ID_HINT: &str = "fhast_EXTENSION_ID";
 
@@ -264,10 +266,8 @@ fn json_obj_to_kv_pairs(value: &serde_json::Value) -> Option<Vec<(String, String
 
 async fn forward_to_daemon(request: &IpcRequest) -> Result<IpcResponse> {
     let socket_path = paths::socket_path().context("resolve daemon socket path")?;
-    let stream = UnixStream::connect(&socket_path)
-        .await
-        .with_context(|| format!("connect daemon socket {}", socket_path.display()))?;
-    let (reader, mut writer) = stream.into_split();
+    let stream = connect_to_daemon(&socket_path).await?;
+    let (reader, mut writer) = split_stream(stream);
     let mut reader = BufReader::new(reader);
 
     write_message(&mut writer, request).await?;
@@ -406,24 +406,44 @@ fn discover_extension_id() -> Option<String> {
 }
 
 fn chrome_user_data_dir() -> Option<PathBuf> {
-    if let Ok(dir) = env::var("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(dir).join("google-chrome"));
+    #[cfg(target_os = "macos")]
+    {
+        let home = env::var("HOME").ok()?;
+        return Some(
+            home.join("Library")
+                .join("Application Support")
+                .join("Google")
+                .join("Chrome"),
+        );
     }
-    let home = env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".config").join("google-chrome"))
+    #[cfg(windows)]
+    {
+        let local = env::var("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                env::var("USERPROFILE")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("AppData")
+                    .join("Local")
+            });
+        return Some(local.join("Google").join("Chrome").join("User Data"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(dir) = env::var("XDG_CONFIG_HOME") {
+            return Some(PathBuf::from(dir).join("google-chrome"));
+        }
+        let home = env::var("HOME").ok()?;
+        Some(PathBuf::from(home).join(".config").join("google-chrome"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    None
 }
 
 fn chrome_native_host_dir() -> Result<PathBuf> {
-    match env::var("XDG_CONFIG_HOME") {
-        Ok(xdg) => Ok(PathBuf::from(xdg).join("google-chrome/NativeMessagingHosts")),
-        Err(_) => {
-            let home = env::var("HOME").context("HOME not set")?;
-            Ok(PathBuf::from(home)
-                .join(".config")
-                .join("google-chrome")
-                .join("NativeMessagingHosts"))
-        }
-    }
+    let user_data = chrome_user_data_dir().context("cannot find Chrome user data directory")?;
+    Ok(user_data.join("NativeMessagingHosts"))
 }
 
 #[cfg(test)]

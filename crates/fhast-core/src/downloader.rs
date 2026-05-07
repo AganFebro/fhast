@@ -134,6 +134,53 @@ impl HttpDownloader {
         cancellation: CancellationToken,
     ) -> Result<DownloadOutcome, CoreError> {
         let id = record.id.as_str();
+        let max_retries = self.config.max_retries;
+        let mut attempt = 0u8;
+
+        loop {
+            attempt += 1;
+            match self
+                .download_single_attempt(
+                    storage,
+                    record.clone(),
+                    probe.clone(),
+                    cancellation.clone(),
+                )
+                .await
+            {
+                Ok(outcome) => return Ok(outcome),
+                Err(error) if error.is_transient() && attempt < max_retries => {
+                    let delay = crate::error::retry_delay(attempt, None);
+                    tracing::warn!(
+                        download_id = id,
+                        attempt,
+                        max_retries,
+                        delay_ms = delay.as_millis(),
+                        %error,
+                        "transient error, retrying",
+                    );
+                    storage
+                        .set_status_async(
+                            id,
+                            DownloadStatus::Queued,
+                            Some(format!("retrying after transient error (attempt {attempt}/{max_retries}): {error}")),
+                        )
+                        .await?;
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn download_single_attempt(
+        &self,
+        storage: &Storage,
+        record: DownloadRecord,
+        probe: ProbeResult,
+        cancellation: CancellationToken,
+    ) -> Result<DownloadOutcome, CoreError> {
+        let id = record.id.as_str();
         let mut resume_offset = temp_file_len(&record.temp_path).await?;
         let mut request = self.client.get(&record.url);
         if resume_offset > 0 {
@@ -148,6 +195,15 @@ impl HttpDownloader {
         let status = response.status();
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
             return Err(CoreError::NeedsRefresh);
+        }
+        if matches!(status, StatusCode::TOO_MANY_REQUESTS) {
+            if let Some(delay) = crate::error::parse_retry_after(response.headers()) {
+                tokio::time::sleep(delay).await;
+            }
+            return Err(CoreError::HttpStatus(status));
+        }
+        if status.is_server_error() {
+            return Err(CoreError::HttpStatus(status));
         }
 
         let append = if resume_offset > 0 {
@@ -239,7 +295,12 @@ impl HttpDownloader {
     ) -> Result<DownloadOutcome, CoreError> {
         let id = record.id.as_str();
         let total_size = probe.total_size.ok_or(CoreError::SegmentRangeRejected)?;
-        let connections = effective_segment_connections(record.requested_connections, &record.url);
+        let connections = effective_segment_connections(
+            record.requested_connections,
+            &record.url,
+            self.config.max_connections_global,
+            self.config.max_connections_per_host,
+        );
         let segments = plan_fixed_segments(id, total_size, connections)
             .map_err(|_| CoreError::SegmentRangeRejected)?;
         if segments.len() <= 1 {
@@ -379,9 +440,14 @@ async fn download_segment_worker(
         .await
         {
             Ok(downloaded) => return Ok(downloaded),
-            Err(error @ (CoreError::Paused | CoreError::SegmentRangeRejected)) => {
-                return Err(error)
+            Err(
+                err @ (CoreError::Paused
+                | CoreError::SegmentRangeRejected
+                | CoreError::NeedsRefresh),
+            ) => {
+                return Err(err);
             }
+            Err(error) if !error.is_transient() => return Err(error),
             Err(error) if attempt == retry_attempts => return Err(error),
             Err(error) => {
                 storage
@@ -439,6 +505,9 @@ async fn download_segment_attempt(
         .await?;
     match response.status() {
         StatusCode::PARTIAL_CONTENT => {}
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            return Err(CoreError::NeedsRefresh);
+        }
         StatusCode::OK | StatusCode::RANGE_NOT_SATISFIABLE => {
             storage
                 .set_segment_status_async(
@@ -449,6 +518,12 @@ async fn download_segment_attempt(
                 )
                 .await?;
             return Err(CoreError::SegmentRangeRejected);
+        }
+        StatusCode::TOO_MANY_REQUESTS => {
+            if let Some(delay) = crate::error::parse_retry_after(response.headers()) {
+                tokio::time::sleep(delay).await;
+            }
+            return Err(CoreError::HttpStatus(StatusCode::TOO_MANY_REQUESTS));
         }
         status => return Err(CoreError::HttpStatus(status)),
     }

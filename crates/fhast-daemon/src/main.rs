@@ -8,11 +8,11 @@ use fhast_core::{
     paths, resolve_output_path, DownloadOutcome, DownloadRecord, HttpDownloader, Storage,
 };
 use fhast_ipc::{
-    read_message, write_message, DownloadDto, EventDto, IpcRequest, IpcResponse, SegmentDto,
-    IPC_VERSION,
+    bind_daemon_socket, connect_to_daemon, read_message, split_stream, write_message, DownloadDto,
+    EventDto, IpcRequest, IpcResponse, IpcStream, SegmentDto, IPC_VERSION,
 };
+use interprocess::local_socket::traits::tokio::Listener;
 use tokio::io::BufReader;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
 
     let socket_path = paths::socket_path().context("resolve daemon socket path")?;
-    if UnixStream::connect(&socket_path).await.is_ok() {
+    if connect_to_daemon(&socket_path).await.is_ok() {
         anyhow::bail!(
             "fhast-daemon is already running at {}",
             socket_path.display()
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
         speeds: Mutex::new(HashMap::new()),
     });
 
-    let listener = UnixListener::bind(&socket_path).context("bind daemon socket")?;
+    let listener = bind_daemon_socket(&socket_path).context("bind daemon socket")?;
     info!(socket = %socket_path.display(), "fhast-daemon started");
     schedule_next_queued_download(state.clone());
 
@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let (stream, _) = accepted.context("accept daemon IPC connection")?;
+                let stream = accepted.context("accept daemon IPC connection")?;
                 let state = state.clone();
                 let shutdown_tx = shutdown_tx.clone();
                 tokio::spawn(async move {
@@ -113,10 +113,10 @@ struct DaemonState {
 
 async fn handle_client(
     state: Arc<DaemonState>,
-    stream: UnixStream,
+    stream: IpcStream,
     shutdown_tx: mpsc::UnboundedSender<()>,
 ) -> Result<()> {
-    let (reader, mut writer) = stream.into_split();
+    let (reader, mut writer) = split_stream(stream);
     let mut reader = BufReader::new(reader);
     let response = match read_message::<IpcRequest, _>(&mut reader).await {
         Ok(request) => match handle_request(state, request, shutdown_tx).await {

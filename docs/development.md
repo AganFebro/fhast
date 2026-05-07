@@ -5,7 +5,7 @@
 - **Rust** 1.80+ (stable)
 - **Node.js** 20+ (for Chrome extension TypeScript build)
 - **Chrome** or Chromium (for extension testing)
-- **Linux** (current target; macOS/Windows are future milestones)
+- **Linux**, **macOS**, or **Windows** (cross-platform)
 
 ## Clone & Build
 

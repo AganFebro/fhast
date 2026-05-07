@@ -21,6 +21,14 @@ cargo run -p fhast-cli -- tui
 cargo run -p fhast-cli -- daemon stop
 ```
 
+Or use the convenience build scripts:
+
+```bash
+./scripts/build.sh            # Full build (Rust + extension)
+./scripts/build-rust.sh       # Rust only (build, test, clippy, fmt)
+./scripts/build-extension.sh  # Extension only (typescript, lint, format)
+```
+
 ## Commands
 
 | Command | Description |
@@ -40,6 +48,9 @@ cargo run -p fhast-cli -- daemon stop
 | `fhast retry <id>` | Retry a failed download |
 | `fhast events` | Show recent daemon events |
 | `fhast tui` | Open the terminal dashboard |
+| `fhast config get [key]` | Show all or specific config |
+| `fhast config set <key> <value>` | Set a config value |
+| `fhast doctor` | Run system diagnostics |
 
 ## Chrome Extension
 

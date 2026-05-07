@@ -6,10 +6,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use fhast_core::paths;
 use fhast_ipc::{
-    read_message, write_message, DownloadDto, EventDto, IpcRequest, IpcResponse, IPC_VERSION,
+    connect_to_daemon, read_message, split_stream, write_message, DownloadDto, EventDto,
+    IpcRequest, IpcResponse, IPC_VERSION,
 };
 use tokio::io::BufReader;
-use tokio::net::UnixStream;
 
 #[derive(Debug, Parser)]
 #[command(name = "fhast")]
@@ -62,6 +62,17 @@ enum Commands {
         limit: u32,
     },
     Tui,
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    Doctor,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    Get { key: Option<String> },
+    Set { key: String, value: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -230,17 +241,225 @@ async fn main() -> Result<()> {
                 anyhow::bail!("tui exited with status: {status}");
             }
         }
+        Commands::Config { command } => match command {
+            ConfigCommand::Get { key } => {
+                let cf = fhast_core::load_config_file()?;
+                print_config_value(&cf, key.as_deref());
+            }
+            ConfigCommand::Set { key, value } => {
+                let mut cf = fhast_core::load_config_file()?;
+                set_config_value(&mut cf, &key, &value)?;
+                fhast_core::save_config_file(&cf)?;
+                println!("set {key} = {value}");
+            }
+        },
+        Commands::Doctor => {
+            run_doctor().await;
+        }
     }
 
     Ok(())
 }
 
+fn print_config_value(cf: &fhast_core::ConfigFile, key: Option<&str>) {
+    match key {
+        None | Some("") => {
+            let json = serde_json::to_string_pretty(cf).unwrap_or_default();
+            println!("{json}");
+        }
+        Some("max_retries") => println!("{}", cf.max_retries),
+        Some("max_connections_per_download") => println!("{}", cf.max_connections_per_download),
+        Some("max_connections_global") => println!("{}", cf.max_connections_global),
+        Some("max_connections_per_host") => println!("{}", cf.max_connections_per_host),
+        Some("output_dir") => println!(
+            "{}",
+            cf.output_dir
+                .as_ref()
+                .map_or("not set".to_string(), |p| p.display().to_string())
+        ),
+        Some("sensitive_header_retention") => println!("{}", cf.sensitive_header_retention),
+        Some(unknown) => eprintln!("unknown config key: {unknown}"),
+    }
+}
+
+fn set_config_value(cf: &mut fhast_core::ConfigFile, key: &str, value: &str) -> Result<()> {
+    match key {
+        "max_retries" => cf.max_retries = value.parse().context("max_retries must be u8")?,
+        "max_connections_per_download" => {
+            cf.max_connections_per_download = value
+                .parse()
+                .context("max_connections_per_download must be u16")?
+        }
+        "max_connections_global" => {
+            cf.max_connections_global = value
+                .parse()
+                .context("max_connections_global must be u16")?
+        }
+        "max_connections_per_host" => {
+            cf.max_connections_per_host = value
+                .parse()
+                .context("max_connections_per_host must be u16")?
+        }
+        "output_dir" => {
+            cf.output_dir = if value.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(value))
+            }
+        }
+        "sensitive_header_retention" => {
+            if !matches!(value, "never" | "until_complete" | "encrypted") {
+                anyhow::bail!(
+                    "sensitive_header_retention must be: never, until_complete, or encrypted"
+                );
+            }
+            cf.sensitive_header_retention = value.to_string();
+        }
+        unknown => anyhow::bail!("unknown config key: {unknown}"),
+    }
+    Ok(())
+}
+
+async fn run_doctor() {
+    println!("fhast doctor\n");
+    println!("Configuration:");
+
+    match fhast_core::config_path() {
+        Ok(path) => {
+            println!("  config file: {}", path.display());
+            if path.exists() {
+                println!("    status: found");
+            } else {
+                println!("    status: not found (defaults used)");
+            }
+        }
+        Err(e) => println!("  config file: error ({e})"),
+    }
+
+    println!("\nDaemon socket:");
+    match fhast_core::paths::socket_path() {
+        Ok(path) => {
+            println!("  path: {}", path.display());
+            if path.exists() {
+                println!("    status: socket exists");
+            } else {
+                println!("    status: socket not found (daemon not running?)");
+            }
+        }
+        Err(e) => println!("  error resolving path: {e}"),
+    }
+
+    println!("\nDaemon connection:");
+    match fhast_core::paths::socket_path() {
+        Ok(socket_path) => match connect_to_daemon(&socket_path).await {
+            Ok(_) => println!("  result: connected successfully"),
+            Err(e) => println!("  result: connection failed ({e})"),
+        },
+        Err(e) => println!("  result: cannot resolve socket path ({e})"),
+    }
+
+    println!("\nDatabase:");
+    match std::env::var("XDG_STATE_HOME") {
+        Ok(xdg) => {
+            let db = PathBuf::from(xdg).join("fhast/fhast.db");
+            println!("  path: {}", db.display());
+            match std::fs::metadata(&db) {
+                Ok(m) => {
+                    println!("    exists: yes");
+                    println!("    size: {} bytes", m.len());
+                }
+                Err(_) => println!("    exists: no"),
+            }
+        }
+        Err(_) => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let db = PathBuf::from(home).join(".local/state/fhast/fhast.db");
+            println!("  path: {db}", db = db.display());
+            match std::fs::metadata(&db) {
+                Ok(m) => {
+                    println!("    exists: yes");
+                    println!("    size: {} bytes", m.len());
+                }
+                Err(_) => println!("    exists: no"),
+            }
+        }
+    }
+
+    println!("\nDisk space:");
+    if let Ok(cwd) = std::env::current_dir() {
+        println!("  working directory: {}", cwd.display());
+    }
+    // Check available space in current directory
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = std::fs::metadata(".") {
+            let _dev = meta.dev();
+            // Simple check: can we write?
+            let test = PathBuf::from(".fhast-doctor-test");
+            match std::fs::write(&test, b"fhast-doctor") {
+                Ok(()) => {
+                    println!("  write test: passed");
+                    let _ = std::fs::remove_file(&test);
+                }
+                Err(e) => println!("  write test: failed ({e})"),
+            }
+        }
+    }
+
+    println!("\nNative host:");
+    let manifest_path = {
+        #[cfg(target_os = "macos")]
+        {
+            let home = std::env::var("HOME").unwrap_or_default();
+            PathBuf::from(home)
+                .join("Library/Application Support/Google/Chrome/NativeMessagingHosts/fhast_native_host.json")
+        }
+        #[cfg(windows)]
+        {
+            let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+            PathBuf::from(local)
+                .join("Google/Chrome/User Data/NativeMessagingHosts/fhast_native_host.json")
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+                PathBuf::from(xdg).join("google-chrome/NativeMessagingHosts/fhast_native_host.json")
+            } else {
+                let home = std::env::var("HOME").unwrap_or_default();
+                PathBuf::from(home)
+                    .join(".config/google-chrome/NativeMessagingHosts/fhast_native_host.json")
+            }
+        }
+    };
+    println!("  manifest: {}", manifest_path.display());
+    match std::fs::metadata(&manifest_path) {
+        Ok(_) => {
+            println!("    status: installed");
+            match std::fs::read_to_string(&manifest_path) {
+                Ok(content) => {
+                    if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(path) = manifest.get("path").and_then(|v| v.as_str()) {
+                            println!("    binary: {path}");
+                            if PathBuf::from(path).exists() {
+                                println!("    binary exists: yes");
+                            } else {
+                                println!("    binary exists: NO (build with `cargo build -p fhast-native-host`)");
+                            }
+                        }
+                    }
+                }
+                Err(e) => println!("    error reading: {e}"),
+            }
+        }
+        Err(_) => println!("    status: not installed (run `fhast-native-host --install-host`)"),
+    }
+}
+
 async fn send_request(request: IpcRequest) -> Result<IpcResponse> {
     let socket_path = paths::socket_path().context("resolve daemon socket path")?;
-    let stream = UnixStream::connect(&socket_path)
-        .await
-        .with_context(|| format!("connect to daemon socket {}", socket_path.display()))?;
-    let (reader, mut writer) = stream.into_split();
+    let stream = connect_to_daemon(&socket_path).await?;
+    let (reader, mut writer) = split_stream(stream);
     let mut reader = BufReader::new(reader);
 
     write_message(&mut writer, &request).await?;
@@ -251,7 +470,7 @@ async fn send_request(request: IpcRequest) -> Result<IpcResponse> {
 
 async fn start_daemon() -> Result<bool> {
     let socket_path = paths::socket_path().context("resolve daemon socket path")?;
-    if UnixStream::connect(&socket_path).await.is_ok() {
+    if connect_to_daemon(&socket_path).await.is_ok() {
         return Ok(false);
     }
 
@@ -271,7 +490,7 @@ async fn wait_for_daemon() -> Result<()> {
     let socket_path = paths::socket_path().context("resolve daemon socket path")?;
 
     for _ in 0..50 {
-        if UnixStream::connect(&socket_path).await.is_ok() {
+        if connect_to_daemon(&socket_path).await.is_ok() {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

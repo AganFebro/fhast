@@ -10,4 +10,6 @@ pub enum IpcError {
     ConnectionClosed,
     #[error("unsupported IPC version {actual}; expected {expected}")]
     UnsupportedVersion { expected: u16, actual: u16 },
+    #[error("connection failed: {0}")]
+    ConnectionFailed(String),
 }
