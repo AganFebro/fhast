@@ -410,12 +410,13 @@ fn chrome_user_data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = env::var("HOME").ok()?;
-        return Some(
-            home.join("Library")
+        Some(
+            PathBuf::from(home)
+                .join("Library")
                 .join("Application Support")
                 .join("Google")
                 .join("Chrome"),
-        );
+        )
     }
     #[cfg(windows)]
     {
@@ -428,15 +429,16 @@ fn chrome_user_data_dir() -> Option<PathBuf> {
                     .join("AppData")
                     .join("Local")
             });
-        return Some(local.join("Google").join("Chrome").join("User Data"));
+        Some(local.join("Google").join("Chrome").join("User Data"))
     }
     #[cfg(target_os = "linux")]
     {
         if let Ok(dir) = env::var("XDG_CONFIG_HOME") {
-            return Some(PathBuf::from(dir).join("google-chrome"));
+            Some(PathBuf::from(dir).join("google-chrome"))
+        } else {
+            let home = env::var("HOME").ok()?;
+            Some(PathBuf::from(home).join(".config").join("google-chrome"))
         }
-        let home = env::var("HOME").ok()?;
-        Some(PathBuf::from(home).join(".config").join("google-chrome"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     None

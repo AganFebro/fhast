@@ -3,6 +3,7 @@ members = [
   "crates/fhast-cli",
   "crates/fhast-core",
   "crates/fhast-daemon",
+  "crates/fhast-gui",
   "crates/fhast-ipc",
   "crates/fhast-native-host",
   "crates/fhast-tui",

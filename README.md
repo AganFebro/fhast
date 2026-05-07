@@ -17,6 +17,9 @@ cargo run -p fhast-cli -- add "https://example.com/file.zip"
 # Open the TUI dashboard
 cargo run -p fhast-cli -- tui
 
+# Open the Windows GUI dashboard
+cargo run -p fhast-gui
+
 # Stop the daemon
 cargo run -p fhast-cli -- daemon stop
 ```
@@ -51,6 +54,8 @@ Or use the convenience build scripts:
 | `fhast config get [key]` | Show all or specific config |
 | `fhast config set <key> <value>` | Set a config value |
 | `fhast doctor` | Run system diagnostics |
+
+The Windows GUI is available as `fhast-gui`. It starts `fhast-daemon` when needed, shows download progress and details, provides download controls and config editing, and minimizes to the system tray so downloads keep running.
 
 ## Chrome Extension
 

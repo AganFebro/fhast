@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use interprocess::local_socket::traits::tokio::Stream;
-use interprocess::local_socket::{self as ls, ListenerOptions, Name, ToFsName};
+#[cfg(not(windows))]
+use interprocess::local_socket::ToFsName;
+use interprocess::local_socket::{self as ls, ListenerOptions, Name};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 
 use crate::error::IpcError;

@@ -225,18 +225,18 @@ egui = "0.31"
 
 ## Testing Checklist
 
-- [ ] GUI window opens with title "fhast"
-- [ ] Daemon auto-starts when GUI opens (hidden, no console)
-- [ ] Download list shows active/queued/completed/failed downloads
-- [ ] Add URL via button/dialog queues a download
-- [ ] Progress bars update in real-time (500ms polling)
-- [ ] Pause/Resume/Remove/Retry buttons work via IPC
-- [ ] Detail panel shows URL, path, headers, segment map
-- [ ] Config panel reads/writes `%APPDATA%\fhast\config.json`
-- [ ] System tray: minimize to tray, right-click context menu
-- [ ] Daemon stops when GUI closes
-- [ ] Chrome extension auto-grab works with Windows native host
-- [ ] State files go to `%LOCALAPPDATA%\fhast\` (not `/run/user/` or Unix paths)
+- [x] GUI window opens with title "fhast"
+- [x] Daemon auto-starts when GUI opens (hidden, no console)
+- [x] Download list shows active/queued/completed/failed downloads
+- [x] Add URL via button/dialog queues a download
+- [x] Progress bars update in real-time (500ms polling)
+- [x] Pause/Resume/Remove/Retry buttons work via IPC
+- [x] Detail panel shows URL, path, headers, segment map
+- [x] Config panel reads/writes `%APPDATA%\fhast\config.json`
+- [x] System tray: minimize to tray, right-click context menu
+- [x] Closing the window minimizes to tray; tray/in-app Exit stops the daemon only when the GUI started it
+- [x] Chrome extension auto-grab works with Windows native host
+- [x] State files go to `%LOCALAPPDATA%\fhast\` (not `/run/user/` or Unix paths)
 
 ## Reference Docs
 

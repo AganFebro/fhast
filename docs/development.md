@@ -15,7 +15,7 @@ cd fhast
 cargo build
 ```
 
-This builds all crates: `fhast-core`, `fhast-ipc`, `fhast-daemon`, `fhast-cli`, `fhast-tui`, `fhast-native-host`.
+This builds all crates: `fhast-core`, `fhast-ipc`, `fhast-daemon`, `fhast-cli`, `fhast-tui`, `fhast-gui`, `fhast-native-host`.
 
 ## Run Tests
 
@@ -61,6 +61,14 @@ Check progress in the TUI:
 ```bash
 cargo run -p fhast-cli -- tui
 ```
+
+Run the Windows desktop GUI:
+
+```bash
+cargo run -p fhast-gui
+```
+
+The GUI starts `fhast-daemon` when it is not already running. Closing the window minimizes to the tray; use the tray `Exit` command or the in-app `Exit` button to stop a daemon that the GUI started.
 
 Stop the daemon:
 
@@ -155,6 +163,12 @@ fhast/
     fhast-tui/            # Terminal dashboard
       src/
         main.rs           # Ratatui app, views, keybindings
+    fhast-gui/            # Windows desktop dashboard
+      src/
+        main.rs           # egui app, windows, controls
+        daemon.rs         # daemon startup/shutdown management
+        ipc_client.rs     # async IPC client helpers
+        tray.rs           # system tray integration
     fhast-native-host/    # Chrome Native Messaging bridge
       src/
         main.rs           # stdin/stdout framing, message forwarding

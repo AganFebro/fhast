@@ -2,7 +2,12 @@
 
 ## Config File
 
-Persistent config at `~/.config/fhast/config.json`. Created automatically on first `fhast config set`.
+Persistent config is created automatically on first `fhast config set` or GUI config save.
+
+| OS | Config path |
+|---|---|
+| Linux/macOS | `~/.config/fhast/config.json` |
+| Windows | `%APPDATA%\fhast\config.json` |
 
 ```json
 {
@@ -43,15 +48,22 @@ fhast config set sensitive_header_retention never
 | `XDG_RUNTIME_DIR` | `/run/user/<uid>` | Runtime directory for daemon socket |
 | `XDG_STATE_HOME` | `~/.local/state` | State directory for database and job files |
 | `HOME` | — | Fallback home directory for state path |
+| `APPDATA` | `%USERPROFILE%\AppData\Roaming` | Windows config directory base |
+| `LOCALAPPDATA` | `%USERPROFILE%\AppData\Local` | Windows state/runtime directory base |
+| `USERPROFILE` | — | Windows home directory fallback |
 
 ## File Paths
 
-| Path | Purpose |
-|---|---|
-| `~/.local/state/fhast/fhast.db` | SQLite database |
-| `~/.local/state/fhast/jobs/<id>/` | Job temp directories (part files, metadata) |
-| `/run/user/<uid>/fhast/fhast.sock` | Daemon Unix domain socket |
-| `~/.config/google-chrome/NativeMessagingHosts/fhast_native_host.json` | Chrome native host manifest |
+| OS | Path | Purpose |
+|---|---|---|
+| Linux | `~/.local/state/fhast/fhast.db` | SQLite database |
+| Linux | `~/.local/state/fhast/jobs/<id>/` | Job temp directories (part files, metadata) |
+| Linux | `/run/user/<uid>/fhast/fhast.sock` | Daemon Unix domain socket |
+| Linux | `~/.config/google-chrome/NativeMessagingHosts/fhast_native_host.json` | Chrome native host manifest |
+| Windows | `%LOCALAPPDATA%\fhast\fhast.db` | SQLite database |
+| Windows | `%LOCALAPPDATA%\fhast\jobs\<id>\` | Job temp directories (part files, metadata) |
+| Windows | `\\.\pipe\fhast-<user>` | Daemon named pipe |
+| Windows | `%LOCALAPPDATA%\Google\Chrome\User Data\NativeMessagingHosts\fhast_native_host.json` | Chrome native host manifest |
 
 ## Download Defaults
 
@@ -61,7 +73,7 @@ fhast config set sensitive_header_retention never
 | Global max connections | 16 |
 | Max connections per host | 8 |
 | Min segment size | 8 MiB |
-| Output directory | Current working directory |
+| Output directory | Current working directory for CLI/TUI; GUI uses configured `output_dir`, then `Downloads`, then executable directory |
 | Retry behavior | Exponential backoff, bounded attempts |
 
 ## Privacy Defaults

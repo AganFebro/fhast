@@ -298,7 +298,28 @@ Goal: suggest candidate downloads only with visible user consent.
 - [x] Add optional header capture with explicit user intent.
 - [x] Keep cookies and auth header capture out of default behavior.
 
-## Milestone 12: Advanced Media And Future Features
+## Milestone 12: Windows GUI Dashboard
+
+Goal: provide a desktop Windows frontend without moving download ownership out of the daemon.
+
+- [x] Add `crates/fhast-gui`.
+- [x] Use egui/eframe for a modern dark desktop interface.
+- [x] Start `fhast-daemon` when the GUI launches and no daemon is running.
+- [x] Track whether the GUI started the daemon before stopping it on explicit exit.
+- [x] Connect to the daemon through existing IPC named pipe/local socket helpers.
+- [x] Poll download state every 500ms.
+- [x] Add URL dialog with optional output path, connections, SHA-256, and MD5.
+- [x] Show download list with progress, bytes, speed, status, and errors.
+- [x] Add pause, resume, remove, and retry controls.
+- [x] Add selected download detail panel with URL, path, headers, and segments.
+- [x] Add config panel backed by `ConfigFile`.
+- [x] Store Windows config at `%APPDATA%\fhast\config.json`.
+- [x] Add system tray integration with Show and Exit actions.
+- [x] Closing the window minimizes to tray so downloads continue.
+- [x] Detect recent Chrome auto-grab activity through `x-fhast-origin: native-host` headers.
+- [x] Add drag-and-drop URL ingestion for URL text, `.url` shortcuts, and text files containing URLs.
+
+## Milestone 13: Advanced Media And Future Features
 
 Goal: add advanced features only after core download reliability is stable.
 
@@ -310,7 +331,7 @@ Goal: add advanced features only after core download reliability is stable.
 - [ ] Add non-DRM HLS playlist download.
 - [ ] Add non-DRM DASH manifest download.
 - [ ] Add optional ffmpeg merge support.
-- [ ] Add system tray integration.
+- [x] Add system tray integration.
 - [ ] Add browser download handoff where platform APIs allow it.
 - [ ] Add import/export queue.
 - [ ] Add remote daemon mode with authentication.

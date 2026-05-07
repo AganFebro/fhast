@@ -39,7 +39,7 @@ impl Default for FhastConfig {
     }
 }
 
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -105,14 +105,29 @@ impl From<FhastConfig> for ConfigFile {
 }
 
 fn config_dir() -> Result<PathBuf, std::io::Error> {
-    let base = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg)
-    } else {
-        let home = std::env::var("HOME")
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
-        PathBuf::from(home).join(".config")
-    };
-    Ok(base.join("fhast"))
+    #[cfg(windows)]
+    {
+        let base = env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("USERPROFILE")
+                    .map(|home| PathBuf::from(home).join("AppData").join("Roaming"))
+            })
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA not set"))?;
+        Ok(base.join("fhast"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let base = if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
+            PathBuf::from(xdg)
+        } else {
+            let home = env::var("HOME")
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
+            PathBuf::from(home).join(".config")
+        };
+        Ok(base.join("fhast"))
+    }
 }
 
 pub fn config_path() -> Result<PathBuf, std::io::Error> {

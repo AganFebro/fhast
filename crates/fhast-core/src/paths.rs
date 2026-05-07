@@ -106,12 +106,18 @@ pub fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
 }
 
 fn home_dir() -> std::io::Result<PathBuf> {
-    #[cfg(windows)]
-    {
-        env::var_os("USERPROFILE").map(PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    { env::var_os("HOME").map(PathBuf::from) }.ok_or_else(|| {
+    let home = {
+        #[cfg(windows)]
+        {
+            env::var_os("USERPROFILE").map(PathBuf::from)
+        }
+        #[cfg(not(windows))]
+        {
+            env::var_os("HOME").map(PathBuf::from)
+        }
+    };
+
+    home.ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found")
     })
 }

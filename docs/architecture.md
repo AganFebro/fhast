@@ -14,6 +14,8 @@ fhast-daemon (owns state, runs downloads)
    |  +-- fhast-cli (control client)
    |
    +-- fhast-tui (terminal dashboard)
+  |
+  +-- fhast-gui (Windows desktop dashboard)
 ```
 
 ## Crate Map
@@ -21,10 +23,11 @@ fhast-daemon (owns state, runs downloads)
 | Crate | Purpose | Key files |
 |---|---|---|
 | `fhast-core` | Download engine, storage, models, filename sanitization, paths | `downloader.rs`, `storage.rs`, `model.rs`, `filename.rs`, `paths.rs` |
-| `fhast-ipc` | IPC message schemas and Unix socket transport | `message.rs`, `transport.rs` |
+| `fhast-ipc` | IPC message schemas and local socket transport | `message.rs`, `transport.rs`, `connection.rs` |
 | `fhast-daemon` | Long-running process: socket listener, job scheduler, worker manager | `main.rs` |
 | `fhast-cli` | User-facing CLI that sends IPC commands to daemon | `main.rs` |
 | `fhast-tui` | Ratatui terminal dashboard, read-only IPC poll client | `main.rs` |
+| `fhast-gui` | egui/eframe desktop dashboard for Windows | `main.rs`, `daemon.rs`, `ipc_client.rs`, `tray.rs` |
 | `fhast-native-host` | Chrome Native Messaging bridge (stdin/stdout framing) | `main.rs` |
 | `extension/` | Chrome Manifest V3 extension (TypeScript) | `background.ts`, `popup.ts`, `message_types.ts` |
 
@@ -74,7 +77,7 @@ queued -> probing -> downloading -> merging -> verifying -> completed
 
 ## IPC Protocol
 
-Transport: Unix domain socket (`/run/user/<uid>/fhast/fhast.sock`) on Linux.  
+Transport: Unix domain socket (`/run/user/<uid>/fhast/fhast.sock`) on Linux/macOS, named pipe (`\\.\pipe\fhast-<user>`) on Windows.  
 Format: newline-delimited JSON (`\n` terminated).  
 Every message includes a `version` field (currently `1`).
 
@@ -102,7 +105,7 @@ Every message includes a `version` field (currently `1`).
 
 ## State & Persistence
 
-- **Database**: SQLite via `rusqlite` at `~/.local/state/fhast/fhast.db`
+- **Database**: SQLite via `rusqlite` at `~/.local/state/fhast/fhast.db` on Linux or `%LOCALAPPDATA%\fhast\fhast.db` on Windows
 - **Job temp dirs**: `~/.local/state/fhast/jobs/<id>/`
 - **Schema**: `downloads`, `segments`, `download_headers`, `events`
 
