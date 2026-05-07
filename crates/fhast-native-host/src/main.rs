@@ -1,5 +1,7 @@
 use std::env;
 use std::io::{self, Read, Write};
+#[cfg(windows)]
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -346,6 +348,7 @@ fn print_manifest() -> Result<()> {
 fn install_manifest() -> Result<()> {
     let extension_id = env::var("fhast_EXTENSION_ID")
         .ok()
+        .or_else(configured_extension_id)
         .or_else(discover_extension_id)
         .unwrap_or_else(|| MANIFEST_EXTENSION_ID_HINT.to_string());
 
@@ -354,6 +357,10 @@ fn install_manifest() -> Result<()> {
             "Cannot determine Chrome extension ID.\n\
              Set fhast_EXTENSION_ID env var to your extension ID from chrome://extensions/"
         );
+    }
+
+    if !is_valid_extension_id(&extension_id) {
+        anyhow::bail!("Chrome extension ID must be 32 lowercase characters from a to p");
     }
 
     let manifest = NativeManifest {
@@ -367,15 +374,87 @@ fn install_manifest() -> Result<()> {
         allowed_origins: vec![format!("chrome-extension://{extension_id}/")],
     };
 
-    let native_dir = chrome_native_host_dir()?;
-    std::fs::create_dir_all(&native_dir).context("create native messaging host directory")?;
-    let manifest_path = native_dir.join("fhast_native_host.json");
+    let manifest_path = native_host_manifest_path()?;
+    if let Some(native_dir) = manifest_path.parent() {
+        std::fs::create_dir_all(native_dir).context("create native messaging host directory")?;
+    }
     let payload = serde_json::to_string_pretty(&manifest)?;
     std::fs::write(&manifest_path, payload)
         .with_context(|| format!("write manifest to {}", manifest_path.display()))?;
 
+    #[cfg(windows)]
+    register_windows_native_host(&manifest_path)?;
+
     println!("manifest written to {}", manifest_path.display());
     Ok(())
+}
+
+fn native_host_manifest_path() -> Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        let config_path = fhast_core::config_path().context("resolve fhast config path")?;
+        let config_dir = config_path
+            .parent()
+            .context("resolve fhast config directory")?;
+        Ok(config_dir
+            .join("native-host")
+            .join("fhast_native_host.json"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(chrome_native_host_dir()?.join("fhast_native_host.json"))
+    }
+}
+
+#[cfg(windows)]
+fn register_windows_native_host(manifest_path: &Path) -> Result<()> {
+    const REGISTRY_KEY: &str =
+        r"HKCU\Software\Google\Chrome\NativeMessagingHosts\fhast_native_host";
+
+    let mut command = std::process::Command::new("reg");
+    command
+        .args(["add", REGISTRY_KEY, "/ve", "/t", "REG_SZ", "/d"])
+        .arg(manifest_path)
+        .arg("/f");
+
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command
+        .output()
+        .context("run reg.exe to register Chrome native messaging host")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "register Chrome native messaging host: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    println!("registry key written to {REGISTRY_KEY}");
+    Ok(())
+}
+
+fn configured_extension_id() -> Option<String> {
+    let value = fhast_core::load_config_file()
+        .ok()?
+        .chrome_extension_id
+        .trim()
+        .to_ascii_lowercase();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn is_valid_extension_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| matches!(byte, b'a'..=b'p'))
 }
 
 fn discover_extension_id() -> Option<String> {
@@ -444,6 +523,7 @@ fn chrome_user_data_dir() -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(windows))]
 fn chrome_native_host_dir() -> Result<PathBuf> {
     let user_data = chrome_user_data_dir().context("cannot find Chrome user data directory")?;
     Ok(user_data.join("NativeMessagingHosts"))

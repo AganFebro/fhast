@@ -6,9 +6,11 @@ mod tray;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use eframe::egui::{self, Color32, RichText};
 use fhast_core::{config_path, load_config_file, paths, save_config_file, ConfigFile};
 use fhast_ipc::{DownloadDto, EventDto, IpcRequest, IPC_VERSION};
@@ -19,6 +21,22 @@ use crate::daemon::DaemonManager;
 use crate::tray::{TrayCommand, TrayController};
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+const ROW_HEIGHT: f32 = 24.0;
+const RESIZE_HANDLE_WIDTH: f32 = 8.0;
+const MIN_STATUS: f32 = 90.0;
+const MIN_FILE: f32 = 150.0;
+const MIN_PROGRESS: f32 = 140.0;
+const MIN_SIZE: f32 = 130.0;
+const MIN_SPEED: f32 = 70.0;
+const MIN_CONNECTIONS: f32 = 55.0;
+const MIN_ACTIONS: f32 = 215.0;
+const DEFAULT_STATUS: f32 = 110.0;
+const DEFAULT_FILE: f32 = 240.0;
+const DEFAULT_PROGRESS: f32 = 190.0;
+const DEFAULT_SIZE: f32 = 160.0;
+const DEFAULT_SPEED: f32 = 95.0;
+const DEFAULT_CONNECTIONS: f32 = 80.0;
+const DEFAULT_ACTIONS: f32 = 235.0;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -47,6 +65,7 @@ struct FhastGuiApp {
     tx: Sender<WorkerMessage>,
     rx: Receiver<WorkerMessage>,
     downloads: Vec<DownloadDto>,
+    download_columns: DownloadTableColumns,
     events: Vec<EventDto>,
     detail: Option<DetailData>,
     selected_id: Option<String>,
@@ -61,9 +80,16 @@ struct FhastGuiApp {
     config: ConfigFile,
     config_editor: ConfigEditor,
     config_path: Option<PathBuf>,
+    extension_editor: ExtensionEditor,
+    native_host_status: NativeHostStatus,
+    native_host_status_checked: bool,
+    native_host_status_in_flight: bool,
     show_config: bool,
     show_events: bool,
     show_status: bool,
+    show_extension_setup: bool,
+    show_details: bool,
+    show_close_prompt: bool,
     pending_remove: Option<String>,
     tray: Option<TrayController>,
     tray_error: Option<String>,
@@ -77,6 +103,7 @@ enum WorkerMessage {
         result: Result<Box<DetailData>, String>,
     },
     Action(Result<String, String>),
+    NativeHostStatus(Result<NativeHostStatus, String>),
 }
 
 #[derive(Default)]
@@ -89,6 +116,110 @@ struct AddForm {
     error: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct DownloadTableColumns {
+    status: f32,
+    file: f32,
+    progress: f32,
+    size: f32,
+    speed: f32,
+    connections: f32,
+    actions: f32,
+}
+
+impl Default for DownloadTableColumns {
+    fn default() -> Self {
+        Self {
+            status: DEFAULT_STATUS,
+            file: DEFAULT_FILE,
+            progress: DEFAULT_PROGRESS,
+            size: DEFAULT_SIZE,
+            speed: DEFAULT_SPEED,
+            connections: DEFAULT_CONNECTIONS,
+            actions: DEFAULT_ACTIONS,
+        }
+    }
+}
+
+impl DownloadTableColumns {
+    fn total(self) -> f32 {
+        self.status
+            + self.file
+            + self.progress
+            + self.size
+            + self.speed
+            + self.connections
+            + self.actions
+    }
+
+    fn total_with_handles(self) -> f32 {
+        self.total() + RESIZE_HANDLE_WIDTH * 6.0
+    }
+
+    fn min_total() -> f32 {
+        MIN_STATUS + MIN_FILE + MIN_PROGRESS + MIN_SIZE + MIN_SPEED + MIN_CONNECTIONS + MIN_ACTIONS
+    }
+
+    fn fit_to_available(&mut self, available_width: f32) {
+        self.clamp_minimums();
+        let target = (available_width - RESIZE_HANDLE_WIDTH * 6.0).max(Self::min_total());
+        let delta = target - self.total();
+
+        if delta.abs() < 1.0 {
+            return;
+        }
+
+        if delta > 0.0 {
+            self.file += delta * 0.45;
+            self.progress += delta * 0.25;
+            self.size += delta * 0.15;
+            self.actions += delta * 0.15;
+        } else {
+            self.shrink_by(-delta);
+        }
+    }
+
+    fn clamp_minimums(&mut self) {
+        self.status = self.status.max(MIN_STATUS);
+        self.file = self.file.max(MIN_FILE);
+        self.progress = self.progress.max(MIN_PROGRESS);
+        self.size = self.size.max(MIN_SIZE);
+        self.speed = self.speed.max(MIN_SPEED);
+        self.connections = self.connections.max(MIN_CONNECTIONS);
+        self.actions = self.actions.max(MIN_ACTIONS);
+    }
+
+    fn shrink_by(&mut self, amount: f32) {
+        let status_capacity = self.status - MIN_STATUS;
+        let file_capacity = self.file - MIN_FILE;
+        let progress_capacity = self.progress - MIN_PROGRESS;
+        let size_capacity = self.size - MIN_SIZE;
+        let speed_capacity = self.speed - MIN_SPEED;
+        let connections_capacity = self.connections - MIN_CONNECTIONS;
+        let actions_capacity = self.actions - MIN_ACTIONS;
+        let total_capacity = status_capacity
+            + file_capacity
+            + progress_capacity
+            + size_capacity
+            + speed_capacity
+            + connections_capacity
+            + actions_capacity;
+
+        if total_capacity <= 0.0 {
+            return;
+        }
+
+        let ratio = amount.min(total_capacity) / total_capacity;
+        self.status -= status_capacity * ratio;
+        self.file -= file_capacity * ratio;
+        self.progress -= progress_capacity * ratio;
+        self.size -= size_capacity * ratio;
+        self.speed -= speed_capacity * ratio;
+        self.connections -= connections_capacity * ratio;
+        self.actions -= actions_capacity * ratio;
+    }
+}
+
 struct ConfigEditor {
     max_retries: String,
     max_connections_per_download: String,
@@ -96,6 +227,7 @@ struct ConfigEditor {
     max_connections_per_host: String,
     output_dir: String,
     sensitive_header_retention: String,
+    chrome_extension_id: String,
     error: Option<String>,
 }
 
@@ -116,6 +248,7 @@ impl ConfigEditor {
             } else {
                 config.sensitive_header_retention.clone()
             },
+            chrome_extension_id: config.chrome_extension_id.clone(),
             error: None,
         }
     }
@@ -147,7 +280,41 @@ impl ConfigEditor {
             )?,
             output_dir: optional_path(&self.output_dir),
             sensitive_header_retention,
+            chrome_extension_id: normalize_extension_id(&self.chrome_extension_id)?,
         })
+    }
+}
+
+struct ExtensionEditor {
+    extension_id: String,
+    error: Option<String>,
+}
+
+#[derive(Clone)]
+struct NativeHostStatus {
+    manifest_path: Option<PathBuf>,
+    registry_manifest_path: Option<PathBuf>,
+    installed: bool,
+    error: Option<String>,
+}
+
+impl NativeHostStatus {
+    fn unknown() -> Self {
+        Self {
+            manifest_path: native_host_manifest_path(),
+            registry_manifest_path: None,
+            installed: false,
+            error: None,
+        }
+    }
+}
+
+impl ExtensionEditor {
+    fn from_config(config: &ConfigFile) -> Self {
+        Self {
+            extension_id: config.chrome_extension_id.clone(),
+            error: None,
+        }
     }
 }
 
@@ -184,7 +351,7 @@ impl FhastGuiApp {
         let (tx, rx) = mpsc::channel();
         let config = load_config_file().unwrap_or_default();
         let config_path = config_path().ok();
-        let tray_result = TrayController::new();
+        let tray_result = TrayController::new(&cc.egui_ctx);
         let tray_error = tray_result
             .as_ref()
             .err()
@@ -198,6 +365,7 @@ impl FhastGuiApp {
             tx,
             rx,
             downloads: Vec::new(),
+            download_columns: DownloadTableColumns::default(),
             events: Vec::new(),
             detail: None,
             selected_id: None,
@@ -210,11 +378,18 @@ impl FhastGuiApp {
             add_form: AddForm::default(),
             show_add_dialog: false,
             config_editor: ConfigEditor::from_config(&config),
+            extension_editor: ExtensionEditor::from_config(&config),
+            native_host_status: NativeHostStatus::unknown(),
+            native_host_status_checked: false,
+            native_host_status_in_flight: false,
             config,
             config_path,
             show_config: false,
             show_events: false,
             show_status: false,
+            show_extension_setup: false,
+            show_details: false,
+            show_close_prompt: false,
             pending_remove: None,
             tray,
             tray_error,
@@ -234,8 +409,10 @@ impl FhastGuiApp {
                             self.events = snapshot.events;
                             self.auto_grab = snapshot.auto_grab;
                             self.ensure_selection();
-                            if let Some(id) = self.selected_id.clone() {
-                                self.request_detail(ctx, id);
+                            if self.show_details {
+                                if let Some(id) = self.selected_id.clone() {
+                                    self.request_detail(ctx, id);
+                                }
                             }
                         }
                         Err(error) => {
@@ -263,9 +440,53 @@ impl FhastGuiApp {
                         Err(error) => self.status_message = Some(format!("error: {error}")),
                     }
                     self.request_refresh(ctx);
+                    self.request_native_host_status(ctx);
+                }
+                WorkerMessage::NativeHostStatus(result) => {
+                    self.native_host_status_in_flight = false;
+                    self.native_host_status_checked = true;
+                    match result {
+                        Ok(status) => self.native_host_status = status,
+                        Err(error) => {
+                            self.native_host_status.error = Some(error);
+                            self.native_host_status.installed = false;
+                        }
+                    }
                 }
             }
         }
+    }
+
+    fn reset_native_host_status(&mut self) {
+        self.native_host_status = NativeHostStatus::unknown();
+        self.native_host_status_checked = false;
+    }
+
+    fn has_saved_extension_id(&self) -> bool {
+        !self.config.chrome_extension_id.trim().is_empty()
+    }
+
+    fn needs_native_host_warning(&self) -> bool {
+        self.has_saved_extension_id()
+            && self.native_host_status_checked
+            && !self.native_host_status.installed
+    }
+
+    fn request_native_host_status(&mut self, ctx: &egui::Context) {
+        if self.native_host_status_in_flight {
+            return;
+        }
+
+        self.native_host_status_in_flight = true;
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        self.runtime.spawn(async move {
+            let result = load_native_host_status()
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(WorkerMessage::NativeHostStatus(result));
+            ctx.request_repaint();
+        });
     }
 
     fn ensure_selection(&mut self) {
@@ -389,13 +610,24 @@ impl FhastGuiApp {
         self.spawn_action(ctx, ipc_client::control_download(socket_path, request));
     }
 
+    fn select_download(&mut self, ctx: &egui::Context, id: String) {
+        if self.selected_id.as_deref() != Some(id.as_str()) {
+            self.selected_id = Some(id.clone());
+            self.detail = None;
+        }
+        self.request_detail(ctx, id);
+    }
+
+    fn open_download_details(&mut self, ctx: &egui::Context, id: String) {
+        self.show_details = true;
+        self.select_download(ctx, id);
+    }
+
     fn request_exit(&mut self, ctx: &egui::Context) {
-        if self.daemon.started_by_gui() {
-            match self.runtime.block_on(self.daemon.stop_if_started()) {
-                Ok(Some(message)) => self.status_message = Some(message),
-                Ok(None) => {}
-                Err(error) => self.status_message = Some(format!("daemon stop failed: {error}")),
-            }
+        match self.runtime.block_on(self.daemon.stop()) {
+            Ok(Some(message)) => self.status_message = Some(message),
+            Ok(None) => {}
+            Err(error) => self.status_message = Some(format!("daemon stop failed: {error}")),
         }
         self.exit_requested = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -408,17 +640,18 @@ impl FhastGuiApp {
             Some("window minimized; downloads continue".to_owned())
         };
 
-        if self.tray.is_some() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        } else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
     }
 
     fn show_from_tray(ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    fn prompt_for_close(&mut self, ctx: &egui::Context) {
+        self.show_close_prompt = true;
+        Self::show_from_tray(ctx);
     }
 
     fn handle_tray(&mut self, ctx: &egui::Context) {
@@ -466,7 +699,13 @@ impl FhastGuiApp {
                 self.show_events = true;
             }
             if ui.button("Doctor").clicked() {
+                self.request_native_host_status(ctx);
                 self.show_status = true;
+            }
+            if ui.button("Extension").clicked() {
+                self.extension_editor = ExtensionEditor::from_config(&self.config);
+                self.request_native_host_status(ctx);
+                self.show_extension_setup = true;
             }
             if ui.button("Exit").clicked() {
                 self.request_exit(ctx);
@@ -486,6 +725,17 @@ impl FhastGuiApp {
                 RichText::new("auto-grab idle").color(Color32::GRAY)
             };
             ui.label(auto_text);
+
+            if self.config.chrome_extension_id.trim().is_empty() {
+                ui.label(
+                    RichText::new("extension ID missing").color(Color32::from_rgb(236, 184, 98)),
+                );
+            } else if self.needs_native_host_warning() {
+                ui.label(
+                    RichText::new("Chrome integration (Native Host) not registered")
+                        .color(Color32::from_rgb(236, 184, 98)),
+                );
+            }
         });
     }
 
@@ -500,12 +750,76 @@ impl FhastGuiApp {
             return;
         }
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for download in downloads {
-                self.render_download_row(ctx, ui, &download);
-                ui.add_space(6.0);
-            }
+        self.download_columns.fit_to_available(ui.available_width());
+        let table_width = self.download_columns.total_with_handles();
+
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_width(table_width);
+                self.render_download_table_header(ui);
+                let columns = self.download_columns;
+                for download in downloads {
+                    self.render_download_row(ctx, ui, &download, columns);
+                    ui.add_space(4.0);
+                }
+            });
+    }
+
+    fn render_download_table_header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            table_header_cell(ui, "Status", self.download_columns.status);
+            resize_column_handle(
+                ui,
+                &mut self.download_columns.status,
+                &mut self.download_columns.file,
+                MIN_STATUS,
+                MIN_FILE,
+            );
+            table_header_cell(ui, "File", self.download_columns.file);
+            resize_column_handle(
+                ui,
+                &mut self.download_columns.file,
+                &mut self.download_columns.progress,
+                MIN_FILE,
+                MIN_PROGRESS,
+            );
+            table_header_cell(ui, "Progress", self.download_columns.progress);
+            resize_column_handle(
+                ui,
+                &mut self.download_columns.progress,
+                &mut self.download_columns.size,
+                MIN_PROGRESS,
+                MIN_SIZE,
+            );
+            table_header_cell(ui, "Size", self.download_columns.size);
+            resize_column_handle(
+                ui,
+                &mut self.download_columns.size,
+                &mut self.download_columns.speed,
+                MIN_SIZE,
+                MIN_SPEED,
+            );
+            table_header_cell(ui, "Speed", self.download_columns.speed);
+            resize_column_handle(
+                ui,
+                &mut self.download_columns.speed,
+                &mut self.download_columns.connections,
+                MIN_SPEED,
+                MIN_CONNECTIONS,
+            );
+            table_header_cell(ui, "Conn", self.download_columns.connections);
+            resize_column_handle(
+                ui,
+                &mut self.download_columns.connections,
+                &mut self.download_columns.actions,
+                MIN_CONNECTIONS,
+                MIN_ACTIONS,
+            );
+            table_header_cell(ui, "Actions", self.download_columns.actions);
         });
+        ui.separator();
     }
 
     fn render_download_row(
@@ -513,6 +827,7 @@ impl FhastGuiApp {
         ctx: &egui::Context,
         ui: &mut egui::Ui,
         download: &DownloadDto,
+        columns: DownloadTableColumns,
     ) {
         let selected = self.selected_id.as_deref() == Some(download.id.as_str());
         let fill = if selected {
@@ -522,94 +837,138 @@ impl FhastGuiApp {
         };
 
         egui::Frame::group(ui.style()).fill(fill).show(ui, |ui| {
+            ui.set_min_width(columns.total_with_handles());
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
                 let status_color = status_color(&download.status);
-                ui.label(
+                table_rich_cell(
+                    ui,
                     RichText::new(status_label(&download.status))
                         .color(status_color)
                         .strong(),
+                    columns.status,
                 );
+                table_column_gap(ui);
 
                 let file_name = file_name(&download.final_path);
-                if ui
-                    .selectable_label(selected, RichText::new(file_name).strong())
-                    .clicked()
-                {
-                    self.selected_id = Some(download.id.clone());
-                    self.detail = None;
-                    self.request_detail(ctx, download.id.clone());
-                }
-
-                ui.add_space(8.0);
-                ui.add(
-                    egui::ProgressBar::new(progress_fraction(download))
-                        .desired_width(210.0)
-                        .text(progress_text(download)),
+                let file_response = ui.add_sized(
+                    [columns.file, ROW_HEIGHT],
+                    egui::Label::new(RichText::new(file_name).strong())
+                        .sense(egui::Sense::click())
+                        .truncate(),
                 );
-                ui.label(bytes_text(download));
-
-                if let Some(speed) = download.downloaded_bytes_per_second {
-                    if speed > 0.0 {
-                        ui.label(format_speed(speed));
-                    }
+                if file_response.clicked() {
+                    self.select_download(ctx, download.id.clone());
                 }
+                if file_response.double_clicked() {
+                    self.open_download_details(ctx, download.id.clone());
+                }
+                table_column_gap(ui);
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Remove").clicked() {
-                        self.pending_remove = Some(download.id.clone());
-                    }
-
-                    let retry_enabled = matches!(
-                        download.status.as_str(),
-                        "failed" | "needs_refresh" | "cancelled"
-                    );
-                    if ui
-                        .add_enabled(retry_enabled, egui::Button::new("Retry"))
-                        .clicked()
-                    {
-                        self.control_download(
-                            ctx,
-                            IpcRequest::RetryDownload {
-                                version: IPC_VERSION,
-                                id: download.id.clone(),
-                            },
+                ui.allocate_ui_with_layout(
+                    egui::vec2(columns.progress, ROW_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::ProgressBar::new(progress_fraction(download))
+                                .desired_width(columns.progress - 6.0)
+                                .text(progress_text(download)),
                         );
-                    }
+                    },
+                );
+                table_column_gap(ui);
+                table_text_cell(ui, bytes_text(download), columns.size);
+                table_column_gap(ui);
 
-                    let can_resume = download.status == "paused";
-                    let can_pause = matches!(
-                        download.status.as_str(),
-                        "queued" | "probing" | "downloading" | "merging" | "verifying"
-                    );
-                    let label = if can_resume { "Resume" } else { "Pause" };
-                    if ui
-                        .add_enabled(can_resume || can_pause, egui::Button::new(label))
-                        .clicked()
-                    {
-                        let request = if can_resume {
-                            IpcRequest::ResumeDownload {
-                                version: IPC_VERSION,
-                                id: download.id.clone(),
-                            }
-                        } else {
-                            IpcRequest::PauseDownload {
-                                version: IPC_VERSION,
-                                id: download.id.clone(),
-                            }
-                        };
-                        self.control_download(ctx, request);
-                    }
-                });
+                let speed = download
+                    .downloaded_bytes_per_second
+                    .filter(|speed| *speed > 0.0)
+                    .map(format_speed)
+                    .unwrap_or_else(|| "-".to_owned());
+                table_text_cell(ui, speed, columns.speed);
+                table_column_gap(ui);
+                table_text_cell(
+                    ui,
+                    download.requested_connections.to_string(),
+                    columns.connections,
+                );
+                table_column_gap(ui);
+
+                ui.allocate_ui_with_layout(
+                    egui::vec2(columns.actions, ROW_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if ui
+                            .add_sized([74.0, ROW_HEIGHT], egui::Button::new("Remove"))
+                            .clicked()
+                        {
+                            self.pending_remove = Some(download.id.clone());
+                        }
+
+                        let retry_enabled = matches!(
+                            download.status.as_str(),
+                            "failed" | "needs_refresh" | "cancelled"
+                        );
+                        if ui
+                            .add_enabled(retry_enabled, egui::Button::new("Retry"))
+                            .clicked()
+                        {
+                            self.control_download(
+                                ctx,
+                                IpcRequest::RetryDownload {
+                                    version: IPC_VERSION,
+                                    id: download.id.clone(),
+                                },
+                            );
+                        }
+
+                        let can_resume = download.status == "paused";
+                        let can_pause = matches!(
+                            download.status.as_str(),
+                            "queued" | "probing" | "downloading" | "merging" | "verifying"
+                        );
+                        let label = if can_resume { "Resume" } else { "Pause" };
+                        if ui
+                            .add_enabled(can_resume || can_pause, egui::Button::new(label))
+                            .clicked()
+                        {
+                            let request = if can_resume {
+                                IpcRequest::ResumeDownload {
+                                    version: IPC_VERSION,
+                                    id: download.id.clone(),
+                                }
+                            } else {
+                                IpcRequest::PauseDownload {
+                                    version: IPC_VERSION,
+                                    id: download.id.clone(),
+                                }
+                            };
+                            self.control_download(ctx, request);
+                        }
+                    },
+                );
             });
 
             if let Some(error) = &download.last_error {
-                ui.label(RichText::new(error).color(Color32::from_rgb(236, 98, 98)));
+                table_rich_cell(
+                    ui,
+                    RichText::new(error).color(Color32::from_rgb(236, 98, 98)),
+                    columns.total_with_handles(),
+                );
             }
         });
     }
 
     fn render_details(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Details");
+        ui.horizontal(|ui| {
+            ui.heading("Details");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Close").clicked() {
+                    self.show_details = false;
+                }
+            });
+        });
         ui.separator();
 
         let Some(selected_id) = self.selected_id.as_ref() else {
@@ -645,55 +1004,60 @@ impl FhastGuiApp {
             );
         }
 
-        ui.add_space(12.0);
-        ui.heading("Segments");
-        if detail.segments.is_empty() {
-            ui.label("single connection");
-        } else {
-            for segment in &detail.segments {
-                let total = segment.end_byte.saturating_sub(segment.start_byte) + 1;
-                let fraction = if total > 0 {
-                    segment.downloaded_bytes as f32 / total as f32
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new(format!("Segments ({})", detail.segments.len()))
+            .default_open(false)
+            .show(ui, |ui| {
+                if detail.segments.is_empty() {
+                    ui.label("single connection");
                 } else {
-                    0.0
-                };
-                ui.horizontal(|ui| {
-                    ui.label(format!("#{}", segment.index));
-                    ui.add(
-                        egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
-                            .desired_width(180.0)
-                            .text(format!(
-                                "{} / {}",
-                                format_bytes(segment.downloaded_bytes),
-                                format_bytes(total)
-                            )),
-                    );
-                    ui.label(&segment.status);
-                });
-            }
-        }
-
-        ui.add_space(12.0);
-        ui.heading(format!("Headers ({})", detail.headers.len()));
-        if detail.headers.is_empty() {
-            ui.label("no headers stored");
-        } else {
-            egui::ScrollArea::vertical()
-                .max_height(220.0)
-                .show(ui, |ui| {
-                    for (name, value, sensitive) in &detail.headers {
-                        let shown_value = if *sensitive {
-                            "<redacted>".to_owned()
+                    for segment in &detail.segments {
+                        let total = segment.end_byte.saturating_sub(segment.start_byte) + 1;
+                        let fraction = if total > 0 {
+                            segment.downloaded_bytes as f32 / total as f32
                         } else {
-                            truncate(value, 96)
+                            0.0
                         };
-                        ui.horizontal_wrapped(|ui| {
-                            ui.monospace(name);
-                            ui.label(shown_value);
+                        ui.horizontal(|ui| {
+                            ui.label(format!("#{}", segment.index));
+                            ui.add(
+                                egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
+                                    .desired_width(180.0)
+                                    .text(format!(
+                                        "{} / {}",
+                                        format_bytes(segment.downloaded_bytes),
+                                        format_bytes(total)
+                                    )),
+                            );
+                            ui.label(&segment.status);
                         });
                     }
-                });
-        }
+                }
+            });
+
+        egui::CollapsingHeader::new(format!("Headers ({})", detail.headers.len()))
+            .default_open(false)
+            .show(ui, |ui| {
+                if detail.headers.is_empty() {
+                    ui.label("no headers stored");
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height(220.0)
+                        .show(ui, |ui| {
+                            for (name, value, sensitive) in &detail.headers {
+                                let shown_value = if *sensitive {
+                                    "<redacted>".to_owned()
+                                } else {
+                                    truncate(value, 96)
+                                };
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.monospace(name);
+                                    ui.label(shown_value);
+                                });
+                            }
+                        });
+                }
+            });
     }
 
     fn render_add_dialog(&mut self, ctx: &egui::Context) {
@@ -770,6 +1134,11 @@ impl FhastGuiApp {
                     &mut self.config_editor.max_connections_per_host,
                 );
                 config_field(ui, "Output dir", &mut self.config_editor.output_dir);
+                config_field(
+                    ui,
+                    "Chrome extension ID",
+                    &mut self.config_editor.chrome_extension_id,
+                );
 
                 egui::ComboBox::from_label("Sensitive header retention")
                     .selected_text(&self.config_editor.sensitive_header_retention)
@@ -801,7 +1170,10 @@ impl FhastGuiApp {
                             Ok(config) => match save_config_file(&config) {
                                 Ok(()) => {
                                     self.config = config;
+                                    self.extension_editor =
+                                        ExtensionEditor::from_config(&self.config);
                                     self.config_editor.error = None;
+                                    self.reset_native_host_status();
                                     self.status_message = Some("config saved".to_owned());
                                 }
                                 Err(error) => self.config_editor.error = Some(error.to_string()),
@@ -814,6 +1186,8 @@ impl FhastGuiApp {
                             Ok(config) => {
                                 self.config = config;
                                 self.config_editor = ConfigEditor::from_config(&self.config);
+                                self.extension_editor = ExtensionEditor::from_config(&self.config);
+                                self.reset_native_host_status();
                                 self.status_message = Some("config reloaded".to_owned());
                             }
                             Err(error) => self.config_editor.error = Some(error.to_string()),
@@ -822,6 +1196,119 @@ impl FhastGuiApp {
                 });
             });
         self.show_config = open;
+    }
+
+    fn save_extension_settings(&mut self) -> bool {
+        match normalize_extension_id(&self.extension_editor.extension_id) {
+            Ok(extension_id) => {
+                self.config.chrome_extension_id = extension_id;
+                match save_config_file(&self.config) {
+                    Ok(()) => {
+                        self.config_editor = ConfigEditor::from_config(&self.config);
+                        self.extension_editor = ExtensionEditor::from_config(&self.config);
+                        self.extension_editor.error = None;
+                        self.reset_native_host_status();
+                        self.status_message = Some("extension settings saved".to_owned());
+                        true
+                    }
+                    Err(error) => {
+                        self.extension_editor.error = Some(error.to_string());
+                        false
+                    }
+                }
+            }
+            Err(error) => {
+                self.extension_editor.error = Some(error);
+                false
+            }
+        }
+    }
+
+    fn render_extension_window(&mut self, ctx: &egui::Context) {
+        if !self.show_extension_setup {
+            return;
+        }
+
+        let mut open = self.show_extension_setup;
+        egui::Window::new("Chrome Integration (Native Host)")
+            .open(&mut open)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                if let Some(path) = &self.config_path {
+                    ui.label(format!("Config file: {}", path.display()));
+                }
+
+                ui.label("Chrome integration uses the Native Host helper: fhast-native-host.exe.");
+
+                config_field(
+                    ui,
+                    "Chrome extension ID",
+                    &mut self.extension_editor.extension_id,
+                );
+
+                if self.extension_editor.extension_id.trim().is_empty() {
+                    ui.label(
+                        RichText::new("Extension ID is not set.")
+                            .color(Color32::from_rgb(236, 184, 98)),
+                    );
+                }
+
+                if let Some(path) = &self.native_host_status.manifest_path {
+                    detail_line(
+                        ui,
+                        "Chrome integration (Native Host)",
+                        native_host_status_label(&self.native_host_status),
+                    );
+                    detail_line(ui, "Manifest", &path.display().to_string());
+                }
+                if let Some(path) = &self.native_host_status.registry_manifest_path {
+                    detail_line(ui, "Registry", &path.display().to_string());
+                }
+                if self.native_host_status_in_flight {
+                    ui.label("Checking native host status...");
+                }
+                if let Some(error) = &self.native_host_status.error {
+                    ui.label(RichText::new(error).color(Color32::from_rgb(236, 184, 98)));
+                }
+
+                if let Some(error) = &self.extension_editor.error {
+                    ui.label(RichText::new(error).color(Color32::from_rgb(236, 98, 98)));
+                }
+
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        self.save_extension_settings();
+                    }
+
+                    let can_install = !self.extension_editor.extension_id.trim().is_empty();
+                    if ui
+                        .add_enabled(
+                            can_install,
+                            egui::Button::new("Register Chrome Integration (Native Host)"),
+                        )
+                        .clicked()
+                        && self.save_extension_settings()
+                    {
+                        let extension_id = self.config.chrome_extension_id.clone();
+                        self.spawn_action(ctx, install_native_host(extension_id));
+                    }
+
+                    if ui.button("Reload").clicked() {
+                        match load_config_file() {
+                            Ok(config) => {
+                                self.config = config;
+                                self.config_editor = ConfigEditor::from_config(&self.config);
+                                self.extension_editor = ExtensionEditor::from_config(&self.config);
+                                self.reset_native_host_status();
+                                self.status_message =
+                                    Some("extension settings reloaded".to_owned());
+                            }
+                            Err(error) => self.extension_editor.error = Some(error.to_string()),
+                        }
+                    }
+                });
+            });
+        self.show_extension_setup = open;
     }
 
     fn render_events_window(&mut self, ctx: &egui::Context) {
@@ -888,6 +1375,29 @@ impl FhastGuiApp {
                 if let Some(path) = &self.config_path {
                     detail_line(ui, "Config", &path.display().to_string());
                 }
+                detail_line(
+                    ui,
+                    "Extension ID",
+                    if self.config.chrome_extension_id.trim().is_empty() {
+                        "not set"
+                    } else {
+                        "set"
+                    },
+                );
+                if let Some(path) = native_host_manifest_path() {
+                    detail_line(
+                        ui,
+                        "Chrome integration (Native Host)",
+                        native_host_status_label(&self.native_host_status),
+                    );
+                    detail_line(ui, "Manifest", &path.display().to_string());
+                }
+                if let Some(path) = &self.native_host_status.registry_manifest_path {
+                    detail_line(ui, "Registry", &path.display().to_string());
+                }
+                if self.native_host_status_in_flight {
+                    detail_line(ui, "Native host check", "running");
+                }
                 detail_line(ui, "Downloads", &self.downloads.len().to_string());
                 detail_line(ui, "Active", &active_count(&self.downloads).to_string());
                 if let Some(capture_at) = &self.auto_grab.last_capture_at {
@@ -930,6 +1440,33 @@ impl FhastGuiApp {
                 });
             });
     }
+
+    fn render_close_prompt(&mut self, ctx: &egui::Context) {
+        if !self.show_close_prompt {
+            return;
+        }
+
+        egui::Window::new("Close fhast?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Choose what should happen when this window closes.");
+                ui.horizontal(|ui| {
+                    if ui.button("Minimize to Tray").clicked() {
+                        self.show_close_prompt = false;
+                        self.hide_to_tray(ctx);
+                    }
+                    if ui.button("Close fhast").clicked() {
+                        self.show_close_prompt = false;
+                        self.request_exit(ctx);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_close_prompt = false;
+                    }
+                });
+            });
+    }
 }
 
 impl eframe::App for FhastGuiApp {
@@ -938,9 +1475,16 @@ impl eframe::App for FhastGuiApp {
         self.handle_tray(ctx);
         self.handle_dropped_files(ctx);
 
+        if self.has_saved_extension_id()
+            && !self.native_host_status_checked
+            && !self.native_host_status_in_flight
+        {
+            self.request_native_host_status(ctx);
+        }
+
         if ctx.input(|input| input.viewport().close_requested()) && !self.exit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.hide_to_tray(ctx);
+            self.prompt_for_close(ctx);
         }
 
         if self.last_refresh.elapsed() >= REFRESH_INTERVAL {
@@ -952,10 +1496,12 @@ impl eframe::App for FhastGuiApp {
             self.render_toolbar(ctx, ui);
         });
 
-        egui::SidePanel::right("details")
-            .resizable(true)
-            .default_width(390.0)
-            .show(ctx, |ui| self.render_details(ui));
+        if self.show_details {
+            egui::SidePanel::right("details")
+                .resizable(true)
+                .default_width(390.0)
+                .show(ctx, |ui| self.render_details(ui));
+        }
 
         egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -981,9 +1527,11 @@ impl eframe::App for FhastGuiApp {
 
         self.render_add_dialog(ctx);
         self.render_config_window(ctx);
+        self.render_extension_window(ctx);
         self.render_events_window(ctx);
         self.render_status_window(ctx);
         self.render_remove_confirmation(ctx);
+        self.render_close_prompt(ctx);
 
         ctx.request_repaint_after(Duration::from_millis(100));
     }
@@ -1063,6 +1611,227 @@ fn downloads_dir() -> Option<PathBuf> {
 
 fn looks_like_url(value: &str) -> bool {
     value.starts_with("http://") || value.starts_with("https://")
+}
+
+fn normalize_extension_id(value: &str) -> Result<String, String> {
+    let extension_id = value.trim().to_ascii_lowercase();
+    if extension_id.is_empty() {
+        return Ok(String::new());
+    }
+
+    if is_valid_extension_id(&extension_id) {
+        Ok(extension_id)
+    } else {
+        Err("Chrome extension ID must be 32 characters from a to p".to_owned())
+    }
+}
+
+fn is_valid_extension_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| matches!(byte, b'a'..=b'p'))
+}
+
+async fn install_native_host(extension_id: String) -> anyhow::Result<String> {
+    tokio::task::spawn_blocking(move || install_native_host_blocking(&extension_id))
+        .await
+        .context("install native host task failed")?
+}
+
+fn install_native_host_blocking(extension_id: &str) -> anyhow::Result<String> {
+    let native_host = native_host_binary_path()?;
+    let mut command = Command::new(&native_host);
+    command
+        .arg("--install-host")
+        .env("fhast_EXTENSION_ID", extension_id)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command
+        .output()
+        .with_context(|| format!("run {} --install-host", native_host.display()))?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "Chrome integration (Native Host) registration failed: {}",
+            command_output_text(&output.stdout, &output.stderr)
+        );
+    }
+
+    let output_text = command_output_text(&output.stdout, &output.stderr);
+    let message = output_text.trim().lines().last().unwrap_or("");
+
+    if message.is_empty() || message == "native host manifest installed" {
+        Ok("Chrome integration (Native Host) registered".to_owned())
+    } else {
+        Ok(format!("Chrome integration (Native Host): {message}"))
+    }
+}
+
+fn native_host_binary_path() -> anyhow::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("fhast_NATIVE_HOST") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let binary_name = if cfg!(windows) {
+        "fhast-native-host.exe"
+    } else {
+        "fhast-native-host"
+    };
+
+    let mut sibling = std::env::current_exe().context("resolve current executable")?;
+    sibling.set_file_name(binary_name);
+    if sibling.exists() {
+        return Ok(sibling);
+    }
+
+    Ok(PathBuf::from(binary_name))
+}
+
+fn native_host_manifest_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let config_path = config_path().ok()?;
+        let config_dir = config_path.parent()?;
+        Some(
+            config_dir
+                .join("native-host")
+                .join("fhast_native_host.json"),
+        )
+    }
+
+    #[cfg(not(windows))]
+    {
+        Some(
+            chrome_user_data_dir()?
+                .join("NativeMessagingHosts")
+                .join("fhast_native_host.json"),
+        )
+    }
+}
+
+async fn load_native_host_status() -> anyhow::Result<NativeHostStatus> {
+    tokio::task::spawn_blocking(native_host_status_blocking)
+        .await
+        .context("native host status task failed")?
+}
+
+fn native_host_status_blocking() -> anyhow::Result<NativeHostStatus> {
+    let manifest_path = native_host_manifest_path();
+
+    #[cfg(windows)]
+    {
+        let registry_manifest_path = windows_native_host_manifest_value();
+        let installed = registry_manifest_path
+            .as_ref()
+            .is_some_and(|path| path.exists());
+        Ok(NativeHostStatus {
+            manifest_path,
+            registry_manifest_path,
+            installed,
+            error: None,
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        let installed = manifest_path.as_ref().is_some_and(|path| path.exists());
+        Ok(NativeHostStatus {
+            manifest_path,
+            registry_manifest_path: None,
+            installed,
+            error: None,
+        })
+    }
+}
+
+fn native_host_status_label(status: &NativeHostStatus) -> &'static str {
+    if status.installed {
+        "registered"
+    } else if status
+        .manifest_path
+        .as_ref()
+        .is_some_and(|path| path.exists())
+    {
+        "manifest exists, not registered"
+    } else {
+        "not registered"
+    }
+}
+
+#[cfg(windows)]
+fn windows_native_host_manifest_value() -> Option<PathBuf> {
+    const REGISTRY_KEY: &str =
+        r"HKCU\Software\Google\Chrome\NativeMessagingHosts\fhast_native_host";
+
+    let mut command = Command::new("reg");
+    command.args(["query", REGISTRY_KEY, "/ve"]);
+
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value = stdout
+        .lines()
+        .find_map(|line| line.split_once("REG_SZ").map(|(_, value)| value.trim()))?;
+    if value.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+#[cfg(not(windows))]
+fn chrome_user_data_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(
+            PathBuf::from(std::env::var_os("HOME")?)
+                .join("Library")
+                .join("Application Support")
+                .join("Google")
+                .join("Chrome"),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+            Some(PathBuf::from(dir).join("google-chrome"))
+        } else {
+            let home = std::env::var_os("HOME")?;
+            Some(PathBuf::from(home).join(".config").join("google-chrome"))
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    None
+}
+
+fn command_output_text(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut text = String::new();
+    text.push_str(&String::from_utf8_lossy(stdout));
+    if !stderr.is_empty() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&String::from_utf8_lossy(stderr));
+    }
+    text.trim().to_owned()
 }
 
 fn url_from_drop(file: &egui::DroppedFile) -> Option<String> {
@@ -1201,6 +1970,62 @@ fn truncate(value: &str, max_chars: usize) -> String {
         .collect::<String>();
     truncated.push_str("...");
     truncated
+}
+
+fn table_header_cell(ui: &mut egui::Ui, label: &str, width: f32) {
+    table_rich_cell(ui, RichText::new(label).strong(), width);
+}
+
+fn table_text_cell(ui: &mut egui::Ui, value: String, width: f32) {
+    ui.add_sized([width, ROW_HEIGHT], egui::Label::new(value).truncate());
+}
+
+fn table_rich_cell(ui: &mut egui::Ui, value: RichText, width: f32) {
+    ui.add_sized([width, ROW_HEIGHT], egui::Label::new(value).truncate());
+}
+
+fn table_column_gap(ui: &mut egui::Ui) {
+    ui.add_space(RESIZE_HANDLE_WIDTH);
+}
+
+fn resize_column_handle(
+    ui: &mut egui::Ui,
+    left_width: &mut f32,
+    right_width: &mut f32,
+    left_min: f32,
+    right_min: f32,
+) {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(RESIZE_HANDLE_WIDTH, ROW_HEIGHT),
+        egui::Sense::click_and_drag(),
+    );
+
+    if response.hovered() || response.dragged() {
+        ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+    }
+
+    if response.dragged() {
+        let delta = ui.input(|input| input.pointer.delta().x);
+        let min_delta = left_min - *left_width;
+        let max_delta = *right_width - right_min;
+        let applied = delta.clamp(min_delta, max_delta);
+        *left_width += applied;
+        *right_width -= applied;
+    }
+
+    let color = if response.hovered() || response.dragged() {
+        Color32::from_rgb(109, 190, 236)
+    } else {
+        Color32::from_rgb(63, 68, 75)
+    };
+    let center_x = rect.center().x;
+    ui.painter().line_segment(
+        [
+            egui::pos2(center_x, rect.top() + 4.0),
+            egui::pos2(center_x, rect.bottom() - 4.0),
+        ],
+        egui::Stroke::new(1.0, color),
+    );
 }
 
 fn detail_line(ui: &mut egui::Ui, label: &str, value: &str) {

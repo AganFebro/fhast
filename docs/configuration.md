@@ -16,7 +16,8 @@ Persistent config is created automatically on first `fhast config set` or GUI co
   "max_connections_global": 16,
   "max_connections_per_host": 8,
   "output_dir": null,
-  "sensitive_header_retention": "until_complete"
+  "sensitive_header_retention": "until_complete",
+  "chrome_extension_id": ""
 }
 ```
 
@@ -28,6 +29,7 @@ Persistent config is created automatically on first `fhast config set` or GUI co
 | `max_connections_per_host` | u16 | 8 | Per-domain connection cap |
 | `output_dir` | path\|null | null | Override default output directory |
 | `sensitive_header_retention` | string | `until_complete` | `never`, `until_complete`, or `encrypted` |
+| `chrome_extension_id` | string | empty | Chrome extension ID used when installing the native messaging host |
 
 ## CLI Commands
 
@@ -37,6 +39,7 @@ fhast config get max_retries        # Show single key
 fhast config set max_retries 10     # Set a value
 fhast config set output_dir ~/Downloads
 fhast config set sensitive_header_retention never
+fhast config set chrome_extension_id abcdefghijklmnopabcdefghijklmnop
 ```
 
 ## Environment Variables
@@ -63,7 +66,8 @@ fhast config set sensitive_header_retention never
 | Windows | `%LOCALAPPDATA%\fhast\fhast.db` | SQLite database |
 | Windows | `%LOCALAPPDATA%\fhast\jobs\<id>\` | Job temp directories (part files, metadata) |
 | Windows | `\\.\pipe\fhast-<user>` | Daemon named pipe |
-| Windows | `%LOCALAPPDATA%\Google\Chrome\User Data\NativeMessagingHosts\fhast_native_host.json` | Chrome native host manifest |
+| Windows | `HKCU\Software\Google\Chrome\NativeMessagingHosts\fhast_native_host` | Chrome native host registry key |
+| Windows | `%APPDATA%\fhast\native-host\fhast_native_host.json` | Chrome native host manifest file |
 
 ## Download Defaults
 

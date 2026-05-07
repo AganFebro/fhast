@@ -68,8 +68,8 @@ impl DaemonManager {
         self.started_by_gui
     }
 
-    pub async fn stop_if_started(&mut self) -> Result<Option<String>> {
-        if !self.started_by_gui {
+    pub async fn stop(&mut self) -> Result<Option<String>> {
+        if self.socket_path.as_os_str().is_empty() {
             return Ok(None);
         }
 

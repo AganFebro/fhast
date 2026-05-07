@@ -65,8 +65,9 @@ Prefix the scope with the crate or area:
 
 **Service worker console**: `chrome://extensions/` → fhast → "Service Worker" shows real-time logs:
 - `fhast: redirect tracked domain1 → domain2 + N headers + M sensitive`
-- `fhast: grabbed filename | N headers | WITH/NO cookies | using CDN/original URL`
+- `fhast: grabbed filename | N headers | WITH/NO cookies | CD-filename | using redirected URL/original URL + redirected headers/original URL | N sensitive headers`
 - `fhast: skipping duplicate ...` (dedup within 5-second window)
+- `fhast: ignoring non-candidate download ...` (download did not match extension, MIME, filename, or Content-Disposition checks)
 - `fhast: queued <uuid>` (native host confirmed)
 
 **Header flow trace**:
@@ -78,7 +79,7 @@ Prefix the scope with the crate or area:
 **Common issues**:
 - **NO cookies** in log: ensure `"extraHeaders"` is in webRequest listener extraInfoSpec
 - **Headers 0 in TUI**: restart daemon after `cargo build`, ensure download ID matches
-- **302 error with cookies**: check redirect chain — original URL may differ from CDN URL; the `redirectMap` should handle this
+- **302 error after auto-grab**: check the `fhast: grabbed ...` URL mode. Cookie/auth-backed redirects should keep the original URL; plain redirects can use the redirected URL.
 - **Service worker status 15**: add `"type": "module"` to manifest background config
 
 ## Code Style

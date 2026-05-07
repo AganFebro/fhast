@@ -68,7 +68,7 @@ Run the Windows desktop GUI:
 cargo run -p fhast-gui
 ```
 
-The GUI starts `fhast-daemon` when it is not already running. Closing the window minimizes to the tray; use the tray `Exit` command or the in-app `Exit` button to stop a daemon that the GUI started.
+The GUI starts `fhast-daemon` when it is not already running. Closing the window opens a prompt: minimize to the tray to keep downloads running, or close fhast and ask the daemon to stop. The tray `Exit` command and in-app `Exit` button close fhast and ask the daemon to stop.
 
 Stop the daemon:
 
@@ -98,6 +98,8 @@ cd extension && npm run build
 Then reload the extension at `chrome://extensions/` by clicking the refresh icon.
 
 ### Installing the Native Host
+
+In the Windows GUI, this appears as **Register Chrome Integration (Native Host)** so users can connect the browser setup step to the `fhast-native-host.exe` helper.
 
 The native host bridge requires a manifest at:
 

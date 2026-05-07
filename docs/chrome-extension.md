@@ -51,20 +51,21 @@ No cookies, webRequest, or broad host permissions in default install — all are
    - Cancels Chrome's download and sends to fhast instead
    - Captures request headers (cookies, referer, user-agent) via `webRequest.onBeforeSendHeaders`
    - Captures response headers (Content-Disposition filenames, Content-Length, Content-Type, etc.)
-   - Tracks redirect chains: cookies from the original URL follow through 302 redirects to CDN URLs
+   - Tracks redirect chains and chooses the queued URL based on captured headers: cookie/auth-backed redirects keep the original URL, plain redirects can use the final redirected URL
    - Deduplicates: same URL won't be queued twice within 5 seconds
    - Shows recent captures in the popup with 🍪 cookie indicator, header counts, redirect info
 
 ### Response Header Capture
 
-`onHeadersReceived` captures all response headers and forwards them to fhast as `x-fhast-rh:HeaderName` prefixed headers. The `Content-Disposition` filename is extracted and used as the download filename (priority #1, over Chrome's guess or URL parsing).
+`onHeadersReceived` captures all response headers and forwards them to fhast as `x-fhast-rh:HeaderName` prefixed headers. The `Content-Disposition` filename is extracted and used as the download filename (priority #1, over Chrome's guess or URL parsing). A `Content-Disposition: attachment` response can also make a download eligible for auto-grab even when the URL has no useful file extension.
 
 ### Debugging
 
 Open the service worker console at `chrome://extensions/` → fhast → "Service Worker" to see:
 - `fhast: redirect tracked domain1 → domain2 + N headers + M sensitive` — redirect chain tracking
-- `fhast: grabbed filename | N headers | WITH/NO cookies | CD-filename | using CDN/original URL` — download capture details
+- `fhast: grabbed filename | N headers | WITH/NO cookies | CD-filename | using redirected URL/original URL + redirected headers/original URL | N sensitive headers` — download capture details
 - `fhast: skipping duplicate ...` — dedup in action
+- `fhast: ignoring non-candidate download ...` — Chrome download did not match extension, MIME, filename, or `Content-Disposition` attachment checks
 - `fhast: queued <uuid>` — native host confirmed download queued
 
 The popup shows per-capture debug: 🍪 = cookies present, `↩ hostname` = redirect chain, `13h +1s` = 13 normal + 1 sensitive header.
@@ -129,9 +130,15 @@ cargo build -p fhast-native-host
 
 ### Installation
 
+From the GUI, open **Extension**, paste the Chrome extension ID from `chrome://extensions/`, save it, then click **Register Chrome Integration (Native Host)**. That action writes `%APPDATA%\fhast\config.json` and runs `fhast-native-host.exe` to install the native messaging manifest with the stored ID.
+
 ```bash
 cargo run -p fhast-native-host -- --install-host
 ```
+
+The CLI installer also reads `chrome_extension_id` from the fhast config when `fhast_EXTENSION_ID` is not set.
+
+On Windows, Chrome discovers native messaging hosts through the registry. The installer writes the manifest to `%APPDATA%\fhast\native-host\fhast_native_host.json` and registers `HKCU\Software\Google\Chrome\NativeMessagingHosts\fhast_native_host` to point at it.
 
 Or manually:
 

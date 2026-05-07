@@ -57,10 +57,13 @@ Reload the extension after fixing.
 
 Chrome can't find the native host binary or manifest.
 
-1. Check the manifest exists: `cat ~/.config/google-chrome/NativeMessagingHosts/fhast_native_host.json`
-2. Check the binary exists at the path in the manifest
-3. Check the binary is executable: `chmod +x <path>`
-4. Reload the extension at `chrome://extensions/`
+On Windows, the easiest repair path is to open **Extension** in `fhast-gui.exe` and click **Register Chrome Integration (Native Host)** again. That reruns the `fhast-native-host.exe` registration step.
+
+1. On Windows, check the registry key: `reg query HKCU\Software\Google\Chrome\NativeMessagingHosts\fhast_native_host /ve`
+2. On Linux/macOS, check the manifest exists: `cat ~/.config/google-chrome/NativeMessagingHosts/fhast_native_host.json`
+3. Check the binary exists at the path in the manifest
+4. On Linux/macOS, check the binary is executable: `chmod +x <path>`
+5. Reload the extension at `chrome://extensions/`
 
 ### "Access to native messaging host is forbidden"
 

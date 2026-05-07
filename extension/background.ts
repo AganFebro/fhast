@@ -382,24 +382,18 @@ async function handleGrabbedDownload(
       console.log("fhast: skipping duplicate", downloadItem.url.slice(-40));
       return;
     }
-    const candidate = detectCandidate(
-      downloadItem.url,
-      downloadItem.mime ?? "",
-    );
-
-    if (!candidate && !downloadItem.filename) {
-      return;
-    }
 
     let cached = lookupCachedHeaders(downloadItem.url);
-    let downloadUrl = downloadItem.url;
+    let redirectedTargetUrl: string | null = null;
+    let usingRedirectMetadata = false;
 
     const redirectedTo = redirectMap.get(downloadItem.url);
     if (redirectedTo) {
       const redirected = lookupCachedHeaders(redirectedTo);
       if (redirected) {
         cached = redirected;
-        downloadUrl = redirectedTo;
+        redirectedTargetUrl = redirectedTo;
+        usingRedirectMetadata = true;
       }
     }
 
@@ -408,10 +402,30 @@ async function handleGrabbedDownload(
     }
 
     const cdFilename = cached?.contentDispositionFilename;
+    const candidate = detectCandidate(
+      downloadItem.url,
+      downloadItem.mime ?? "",
+    );
+
+    if (!candidate && !downloadItem.filename && !cdFilename) {
+      console.log(
+        "fhast: ignoring non-candidate download",
+        downloadItem.url.slice(-80),
+      );
+      return;
+    }
+
     const filename =
       cdFilename ??
       downloadItem.filename?.split("/").pop() ??
       candidate?.filename;
+    const sensitiveHeaderCount = Object.keys(cached?.sensitiveHeaders ?? {}).length;
+    const shouldUseRedirectedUrl =
+      redirectedTargetUrl !== null && sensitiveHeaderCount === 0;
+    const downloadUrl =
+      shouldUseRedirectedUrl && redirectedTargetUrl !== null
+        ? redirectedTargetUrl
+        : downloadItem.url;
 
     const hasCookies =
       cached?.sensitiveHeaders &&
@@ -433,7 +447,14 @@ async function handleGrabbedDownload(
         ? `redirect from ${new URL(cached.parentUrl).hostname}`
         : "direct",
       "|",
-      downloadUrl !== downloadItem.url ? "using CDN URL" : "using original URL",
+      shouldUseRedirectedUrl
+        ? "using redirected URL"
+        : usingRedirectMetadata
+          ? "using original URL + redirected headers"
+          : "using original URL",
+      "|",
+      sensitiveHeaderCount,
+      "sensitive headers",
     );
 
     const message: AddDownloadMessage = {

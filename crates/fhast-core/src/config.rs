@@ -52,6 +52,8 @@ pub struct ConfigFile {
     pub output_dir: Option<PathBuf>,
     #[serde(default)]
     pub sensitive_header_retention: String,
+    #[serde(default)]
+    pub chrome_extension_id: String,
 }
 
 impl Default for ConfigFile {
@@ -63,6 +65,7 @@ impl Default for ConfigFile {
             max_connections_per_host: 8,
             output_dir: None,
             sensitive_header_retention: "until_complete".to_string(),
+            chrome_extension_id: String::new(),
         }
     }
 }
@@ -100,6 +103,7 @@ impl From<FhastConfig> for ConfigFile {
             max_connections_per_host: cfg.max_connections_per_host,
             output_dir: None,
             sensitive_header_retention: retention.to_string(),
+            chrome_extension_id: String::new(),
         }
     }
 }

@@ -305,17 +305,17 @@ Goal: provide a desktop Windows frontend without moving download ownership out o
 - [x] Add `crates/fhast-gui`.
 - [x] Use egui/eframe for a modern dark desktop interface.
 - [x] Start `fhast-daemon` when the GUI launches and no daemon is running.
-- [x] Track whether the GUI started the daemon before stopping it on explicit exit.
+- [x] Prompt on window close so users choose tray minimize or full fhast shutdown.
 - [x] Connect to the daemon through existing IPC named pipe/local socket helpers.
 - [x] Poll download state every 500ms.
 - [x] Add URL dialog with optional output path, connections, SHA-256, and MD5.
-- [x] Show download list with progress, bytes, speed, status, and errors.
+- [x] Show download list as a responsive resizable table with progress, bytes, speed, status, and errors.
 - [x] Add pause, resume, remove, and retry controls.
-- [x] Add selected download detail panel with URL, path, headers, and segments.
+- [x] Add closable selected download detail panel with URL, path, collapsible headers, and collapsible segments.
 - [x] Add config panel backed by `ConfigFile`.
 - [x] Store Windows config at `%APPDATA%\fhast\config.json`.
 - [x] Add system tray integration with Show and Exit actions.
-- [x] Closing the window minimizes to tray so downloads continue.
+- [x] Minimize to tray from the close prompt so downloads continue.
 - [x] Detect recent Chrome auto-grab activity through `x-fhast-origin: native-host` headers.
 - [x] Add drag-and-drop URL ingestion for URL text, `.url` shortcuts, and text files containing URLs.
 

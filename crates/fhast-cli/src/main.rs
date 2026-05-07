@@ -278,6 +278,14 @@ fn print_config_value(cf: &fhast_core::ConfigFile, key: Option<&str>) {
                 .map_or("not set".to_string(), |p| p.display().to_string())
         ),
         Some("sensitive_header_retention") => println!("{}", cf.sensitive_header_retention),
+        Some("chrome_extension_id") => println!(
+            "{}",
+            if cf.chrome_extension_id.is_empty() {
+                "not set"
+            } else {
+                &cf.chrome_extension_id
+            }
+        ),
         Some(unknown) => eprintln!("unknown config key: {unknown}"),
     }
 }
@@ -314,6 +322,9 @@ fn set_config_value(cf: &mut fhast_core::ConfigFile, key: &str, value: &str) -> 
                 );
             }
             cf.sensitive_header_retention = value.to_string();
+        }
+        "chrome_extension_id" => {
+            cf.chrome_extension_id = value.trim().to_ascii_lowercase();
         }
         unknown => anyhow::bail!("unknown config key: {unknown}"),
     }
@@ -408,34 +419,26 @@ async fn run_doctor() {
     }
 
     println!("\nNative host:");
-    let manifest_path = {
-        #[cfg(target_os = "macos")]
-        {
-            let home = std::env::var("HOME").unwrap_or_default();
-            PathBuf::from(home)
-                .join("Library/Application Support/Google/Chrome/NativeMessagingHosts/fhast_native_host.json")
-        }
-        #[cfg(windows)]
-        {
-            let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            PathBuf::from(local)
-                .join("Google/Chrome/User Data/NativeMessagingHosts/fhast_native_host.json")
-        }
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-                PathBuf::from(xdg).join("google-chrome/NativeMessagingHosts/fhast_native_host.json")
-            } else {
-                let home = std::env::var("HOME").unwrap_or_default();
-                PathBuf::from(home)
-                    .join(".config/google-chrome/NativeMessagingHosts/fhast_native_host.json")
-            }
-        }
-    };
+    let manifest_path = native_host_manifest_path();
     println!("  manifest: {}", manifest_path.display());
+
+    #[cfg(windows)]
+    match windows_native_host_manifest_value() {
+        Some(path) => println!("    registry: registered ({})", path.display()),
+        None => println!("    registry: missing"),
+    }
+
     match std::fs::metadata(&manifest_path) {
         Ok(_) => {
-            println!("    status: installed");
+            #[cfg(windows)]
+            let status = if windows_native_host_manifest_value().is_some() {
+                "installed"
+            } else {
+                "manifest exists, registry missing"
+            };
+            #[cfg(not(windows))]
+            let status = "installed";
+            println!("    status: {status}");
             match std::fs::read_to_string(&manifest_path) {
                 Ok(content) => {
                     if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -453,6 +456,61 @@ async fn run_doctor() {
             }
         }
         Err(_) => println!("    status: not installed (run `fhast-native-host --install-host`)"),
+    }
+}
+
+fn native_host_manifest_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        fhast_core::config_path()
+            .ok()
+            .and_then(|path| path.parent().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("native-host")
+            .join("fhast_native_host.json")
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        PathBuf::from(home).join(
+            "Library/Application Support/Google/Chrome/NativeMessagingHosts/fhast_native_host.json",
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            PathBuf::from(xdg).join("google-chrome/NativeMessagingHosts/fhast_native_host.json")
+        } else {
+            let home = std::env::var("HOME").unwrap_or_default();
+            PathBuf::from(home)
+                .join(".config/google-chrome/NativeMessagingHosts/fhast_native_host.json")
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_native_host_manifest_value() -> Option<PathBuf> {
+    const REGISTRY_KEY: &str =
+        r"HKCU\Software\Google\Chrome\NativeMessagingHosts\fhast_native_host";
+
+    let output = Command::new("reg")
+        .args(["query", REGISTRY_KEY, "/ve"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value = stdout
+        .lines()
+        .find_map(|line| line.split_once("REG_SZ").map(|(_, value)| value.trim()))?;
+    if value.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value))
     }
 }
 
