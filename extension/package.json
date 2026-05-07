@@ -1,0 +1,17 @@
+{
+  "name": "fhast-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chromium link grabber for fhast download manager",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "format": "npx prettier --write '*.ts' '*.json' '*.html'"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "typescript": "^5.5.0",
+    "prettier": "^3.3.0"
+  }
+}

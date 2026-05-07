@@ -1,0 +1,16 @@
+[package]
+name = "fhast-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fhast-core = { path = "../fhast-core" }
+fhast-ipc = { path = "../fhast-ipc" }
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

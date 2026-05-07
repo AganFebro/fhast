@@ -1,0 +1,28 @@
+# Rust build artifacts
+target/
+
+# Node.js / Chrome extension
+extension/node_modules/
+extension/dist/
+extension/package-lock.json
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment / local config
+.env
+.env.local
+*.log
+
+# temp files
+cookie_debug.txt
+project.md
+roadmap.md

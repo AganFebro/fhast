@@ -1,0 +1,37 @@
+# AGENTS.md
+- Scope: build the Rust CLI/TUI download manager, daemon, native host, and Chrome link-grabber extension described in `project.md`.
+- Architecture rule: `fhast-daemon` owns state and downloads; CLI/TUI are clients; Chrome extension captures links; native host only bridges to daemon.
+- Do not add DRM bypass, anti-bot bypass, credential scraping, proxy/VPN evasion, telemetry, or hidden network calls.
+- Prefer reliability over speed: never risk corrupted files for acceleration; fall back cleanly to single-connection downloads.
+- Keep crates focused: `fhast-core` has engine logic, `fhast-ipc` has schemas, UI crates must not duplicate downloader logic.
+- Rust style: use `rustfmt` defaults and optimize for readability, scan-ability, accessible diffs, and non-misleading formatting.
+- Rust naming: crates/files/modules/functions/vars use `snake_case`; types/traits/enums use `UpperCamelCase`; constants/statics use `SCREAMING_SNAKE_CASE`.
+- Rust errors: avoid `unwrap`/`expect` outside tests and impossible invariants; return typed errors and preserve context at boundaries.
+- Rust async: use Tokio with bounded concurrency; never block async tasks; use `spawn_blocking` for CPU-heavy or blocking filesystem work.
+- Rust performance: avoid unnecessary `clone`, `collect`, locks, and allocation; prefer borrowing, streaming, iterators, and clear ownership.
+- Rust APIs: public items need `///` docs; internal comments should explain why, not restate what the code says.
+- Downloader tests must cover range math, resume validation, retry/backoff, file merge, checksum, cancellation, and crash recovery.
+- Network code must verify HTTP `206 Partial Content` before segmented mode and handle `200`, `403`, `416`, `429`, and `5xx` safely.
+- Persist job/segment metadata before risky state changes; use atomic temp-file writes and never leave ambiguous completion state.
+- TypeScript style: enable `strict`; avoid `any`; use `camelCase` for values/functions, `PascalCase` for types/classes, and `CONSTANT_CASE` for constants.
+- Extension code should request minimal permissions first; context-menu capture is MVP; `webRequest`/cookies are optional and user-visible.
+- Native messaging host must validate schema and caller origin, redact sensitive data, and forward only necessary fields to the daemon.
+- JSON/IPC/config keys use `snake_case` unless a platform API requires otherwise; include a `version` field in every cross-process message.
+- SQL uses lowercase `snake_case` table/column names, explicit migrations, prepared queries, and no string-concatenated user input.
+- Shell scripts should be POSIX `sh` unless Bash is required; Bash scripts use `set -euo pipefail` and quote variables.
+- Markdown docs should contain copy-pasteable commands, ASCII diagrams, and updates whenever behavior, flags, or architecture changes.
+- Keep `roadmap.md` current: use `[x]` for implemented features, `[X]` plus a clear description for skipped or removed features, and mark the roadmap complete only when every non-skipped item is finished.
+- Formatting/linting gate: run `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and extension lint/format before PRs.
+- Add `.editorconfig` and keep LF endings, final newlines, UTF-8 text, and no trailing whitespace across Rust, TS, JSON, SQL, shell, and docs.
+- Security: sanitize filenames, reject path traversal, protect save directories, and never log cookies, auth headers, signed URLs, or tokens.
+- Privacy: capture browser headers only with explicit user intent; store sensitive headers only until completion or encrypted if persistence is required.
+- Observability: use `tracing` with structured fields; logs should identify job IDs and domains without exposing secrets.
+- CLI naming: subcommands and flags use `kebab-case`; environment variables use `fhast_SCREAMING_SNAKE_CASE`.
+- TUI UX: quitting the TUI must not stop the daemon; destructive actions need confirmation; errors must be visible and actionable.
+- Commits should follow Conventional Commits, e.g. `feat(core): add segmented range planner` or `fix(extension): redact cookie header`.
+- PRs should be small, tested, documented, and include migration notes when schemas, configs, or IPC messages change.
+- References: https://doc.rust-lang.org/style-guide/ and https://doc.rust-lang.org/style-guide/principles.html
+- References: https://rust-lang.github.io/api-guidelines/naming.html and https://microsoft.github.io/rust-guidelines/
+- References: https://github.com/apollographql/rust-best-practices and https://google.github.io/styleguide/tsguide.html
+- References: https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging and https://developer.chrome.com/docs/extensions/reference/api/contextMenus
+- References: https://www.conventionalcommits.org/en/v1.0.0/ and https://editorconfig.org/
