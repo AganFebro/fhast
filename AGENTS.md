@@ -1,4 +1,5 @@
 # AGENTS.md
+- Do not commit into GitHub without asking.
 - Scope: build the Rust CLI/TUI download manager, daemon, native host, and Chrome link-grabber extension described in `project.md`.
 - Architecture rule: `fhast-daemon` owns state and downloads; CLI/TUI are clients; Chrome extension captures links; native host only bridges to daemon.
 - Do not add DRM bypass, anti-bot bypass, credential scraping, proxy/VPN evasion, telemetry, or hidden network calls.

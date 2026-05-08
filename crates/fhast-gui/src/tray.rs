@@ -1,4 +1,3 @@
-#[cfg(windows)]
 mod imp {
     use std::sync::mpsc::{self, Receiver};
 

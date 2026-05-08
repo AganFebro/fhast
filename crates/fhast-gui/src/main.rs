@@ -1,5 +1,4 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
-#![cfg(windows)]
 
 mod daemon;
 mod ipc_client;
@@ -2049,9 +2048,4 @@ fn config_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
         ui.add_sized([190.0, 20.0], egui::Label::new(label));
         ui.text_edit_singleline(value);
     });
-}
-
-#[cfg(not(windows))]
-fn main() {
-    eprintln!("fhast-gui is only supported on Windows. Use fhast-tui on this platform.");
 }
