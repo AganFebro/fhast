@@ -7,9 +7,12 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-eframe = "0.31"
 egui = "0.31"
+eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts"] }
 fhast-core = { path = "../fhast-core" }
 fhast-ipc = { path = "../fhast-ipc" }
 tokio.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }
 tray-icon = "0.20"
