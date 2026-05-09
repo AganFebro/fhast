@@ -64,12 +64,19 @@ fn is_transient_reqwest(err: &reqwest::Error) -> bool {
     if err.is_timeout() || err.is_connect() || err.is_request() {
         return true;
     }
-    if let Some(source) = std::error::Error::source(err) {
-        if let Some(io) = source.downcast_ref::<std::io::Error>() {
-            return is_transient_io(io);
-        }
+    if let Some(io) = find_io_source(err) {
+        return is_transient_io(io);
     }
     false
+}
+
+fn find_io_source<'a>(err: &'a (dyn std::error::Error + 'static)) -> Option<&'a std::io::Error> {
+    if let Some(io) = err.downcast_ref::<std::io::Error>() {
+        return Some(io);
+    }
+
+    let source = err.source()?;
+    find_io_source(source)
 }
 
 fn is_transient_io(err: &std::io::Error) -> bool {

@@ -21,18 +21,16 @@ manifest.json (Manifest V3)
 
 ### Permissions
 
-**MVP (always granted):**
+**Always granted:**
 - `contextMenus` — right-click link capture
 - `nativeMessaging` — communicate with native host
 - `activeTab` — read current page URL
 - `storage` — persist auto-grab preferences and capture history
-
-**Optional (user-initiated via popup toggle):**
 - `downloads` — observe and cancel Chrome downloads for auto-grab
 - `webRequest` — capture request/response headers including cookies
-- `<all_urls>` host permission — needed for webRequest to observe all requests
+- `<all_urls>` host permission — observe downloads and redirects on all websites
 
-No cookies, webRequest, or broad host permissions in default install — all are opt-in via the "Enable Auto-Grab" button.
+Auto-grab now defaults to enabled the first time the extension starts, stays enabled across Chrome service worker restarts, and only turns off when the user explicitly disables it from the popup.
 
 ### Capture Methods
 
@@ -45,13 +43,13 @@ No cookies, webRequest, or broad host permissions in default install — all are
 3. **Toolbar popup** → "Send current page URL"  
    Captures active tab URL and sends it.
 
-4. **Auto-Grab** (opt-in)  
-   When enabled via popup toggle:
+4. **Auto-Grab**  
+   When enabled:
    - Intercepts all browser downloads via `downloads.onDeterminingFilename`
    - Cancels Chrome's download and sends to fhast instead
    - Captures request headers (cookies, referer, user-agent) via `webRequest.onBeforeSendHeaders`
    - Captures response headers (Content-Disposition filenames, Content-Length, Content-Type, etc.)
-   - Tracks redirect chains and chooses the queued URL based on captured headers: cookie/auth-backed redirects keep the original URL, plain redirects can use the final redirected URL
+   - Tracks redirect chains and keeps the original queued URL while reusing redirected request/response metadata, so one-shot, cookie-backed, and referer-protected final URLs are not replayed after Chrome already touched them
    - Deduplicates: same URL won't be queued twice within 5 seconds
    - Shows recent captures in the popup with 🍪 cookie indicator, header counts, redirect info
 

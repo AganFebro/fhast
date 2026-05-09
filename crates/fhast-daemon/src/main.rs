@@ -20,6 +20,14 @@ use uuid::Uuid;
 
 const DEFAULT_DOWNLOAD_CONNECTIONS: u16 = 8;
 
+fn default_log_filter() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "info"
+    }
+}
+
 struct SpeedTracker {
     last_bytes: u64,
     last_time: Instant,
@@ -49,7 +57,11 @@ impl SpeedTracker {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_target(false).init();
+    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| default_log_filter().into());
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_env_filter(log_filter)
+        .init();
 
     let socket_path = paths::socket_path().context("resolve daemon socket path")?;
     if connect_to_daemon(&socket_path).await.is_ok() {
@@ -374,6 +386,37 @@ async fn run_download(state: Arc<DaemonState>, id: String, cancellation: Cancell
         .ok()
         .unwrap_or_default();
 
+    #[cfg(debug_assertions)]
+    {
+        let download = state.storage.get_download_async(&id).await.ok().flatten();
+        let header_details = state
+            .storage
+            .get_headers_detail_async(&id)
+            .await
+            .ok()
+            .unwrap_or_default();
+        let response_header_count = header_details
+            .iter()
+            .filter(|(name, _, _)| name.starts_with("x-fhast-rh:"))
+            .count();
+        let sensitive_header_count = header_details.iter().filter(|(_, _, sensitive)| *sensitive).count();
+        let request_header_count = header_details
+            .len()
+            .saturating_sub(response_header_count + sensitive_header_count);
+        let url = download
+            .as_ref()
+            .map(|download| download.url.as_str())
+            .unwrap_or("<unavailable>");
+        add_debug_event(
+            &state.storage,
+            Some(&id),
+            format!(
+                "run start url={url} headers request={request_header_count} response={response_header_count} sensitive={sensitive_header_count}"
+            ),
+        )
+        .await;
+    }
+
     let downloader = if custom_headers.is_empty() {
         state.downloader.clone()
     } else {
@@ -387,9 +430,16 @@ async fn run_download(state: Arc<DaemonState>, id: String, cancellation: Cancell
     match result {
         Ok(DownloadOutcome::Completed) => {
             add_event(&state.storage, Some(&id), "info", "download completed").await;
+            add_debug_event(
+                &state.storage,
+                Some(&id),
+                "run completed successfully".to_owned(),
+            )
+            .await;
         }
         Ok(DownloadOutcome::Paused) => {
             add_event(&state.storage, Some(&id), "info", "download paused").await;
+            add_debug_event(&state.storage, Some(&id), "run paused".to_owned()).await;
         }
         Err(fhast_core::CoreError::NeedsRefresh) => {
             let message = "link expired or forbidden; capture or add the URL again";
@@ -401,6 +451,12 @@ async fn run_download(state: Arc<DaemonState>, id: String, cancellation: Cancell
                 error!(%error, download_id = %id, "failed to mark download needs_refresh");
             }
             add_event(&state.storage, Some(&id), "warn", message).await;
+            add_debug_event(
+                &state.storage,
+                Some(&id),
+                "run failed with NeedsRefresh".to_owned(),
+            )
+            .await;
         }
         Err(error) => {
             let message = error.to_string();
@@ -412,6 +468,12 @@ async fn run_download(state: Arc<DaemonState>, id: String, cancellation: Cancell
                 error!(%storage_error, download_id = %id, "failed to mark download failed");
             }
             add_event(&state.storage, Some(&id), "error", &message).await;
+            add_debug_event(
+                &state.storage,
+                Some(&id),
+                format!("run failed with {:?}", error),
+            )
+            .await;
         }
     }
 
@@ -585,5 +647,20 @@ async fn add_event(storage: &Storage, download_id: Option<&str>, level: &str, me
         .await
     {
         warn!(%error, "failed to write event");
+    }
+}
+
+async fn add_debug_event(storage: &Storage, download_id: Option<&str>, message: String) {
+    #[cfg(debug_assertions)]
+    {
+        let message = format!("[debug] {message}");
+        add_event(storage, download_id, "info", &message).await;
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = storage;
+        let _ = download_id;
+        let _ = message;
     }
 }

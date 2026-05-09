@@ -77,6 +77,30 @@ async fn falls_back_when_segment_request_returns_200() {
 }
 
 #[tokio::test]
+async fn falls_back_to_single_connection_when_segment_requests_return_503() {
+    let fixture = TestFixture::new();
+    let server = TestServer::start(ServerMode::RangeProbeOnlyThen503);
+    let record = fixture
+        .insert_download(server.url(), "range-503-fallback.bin", 8, None)
+        .unwrap();
+
+    HttpDownloader::default()
+        .download(&fixture.storage, &record.id, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tokio::fs::read(&record.final_path).await.unwrap(),
+        test_data()
+    );
+    assert!(fixture
+        .storage
+        .list_segments(&record.id)
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn retries_failed_segment_independently() {
     let fixture = TestFixture::new();
     let server = TestServer::start(ServerMode::RangeWithSegmentFailure {

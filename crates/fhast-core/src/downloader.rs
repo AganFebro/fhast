@@ -33,7 +33,7 @@ pub struct HttpDownloader {
 impl Default for HttpDownloader {
     fn default() -> Self {
         Self {
-            client: Client::new(),
+            client: build_client(None),
             config: FhastConfig::default(),
         }
     }
@@ -42,7 +42,7 @@ impl Default for HttpDownloader {
 impl HttpDownloader {
     pub fn new(config: FhastConfig) -> Self {
         Self {
-            client: Client::new(),
+            client: build_client(None),
             config,
         }
     }
@@ -67,13 +67,19 @@ impl HttpDownloader {
             header_map.insert(header_name, header_value);
         }
         Self {
-            client: Client::builder()
-                .default_headers(header_map)
-                .build()
-                .unwrap_or_default(),
+            client: build_client(Some(header_map)),
             config: FhastConfig::default(),
         }
     }
+}
+
+fn build_client(default_headers: Option<reqwest::header::HeaderMap>) -> Client {
+    let mut builder = Client::builder().cookie_store(true);
+    if let Some(headers) = default_headers {
+        builder = builder.default_headers(headers);
+    }
+
+    builder.build().unwrap_or_default()
 }
 
 impl HttpDownloader {
@@ -92,6 +98,14 @@ impl HttpDownloader {
             .set_status_async(id, DownloadStatus::Probing, None)
             .await?;
         let probe = self.probe(&record.url).await?;
+        tracing::debug!(
+            download_id = id,
+            url = %record.url,
+            total_size = ?probe.total_size,
+            etag = ?probe.etag,
+            last_modified = ?probe.last_modified,
+            "probe completed"
+        );
         ensure_resume_valid(&record.etag, &record.last_modified, &probe)?;
         storage
             .set_probe_info_async(
@@ -105,6 +119,13 @@ impl HttpDownloader {
         let segmented = record.requested_connections > 1
             && probe.total_size.is_some()
             && self.range_probe(&record.url).await?.is_some();
+        tracing::debug!(
+            download_id = id,
+            url = %record.url,
+            requested_connections = record.requested_connections,
+            segmented,
+            "selected download mode"
+        );
 
         if segmented {
             match self
@@ -112,7 +133,13 @@ impl HttpDownloader {
                 .await
             {
                 Ok(outcome) => return Ok(outcome),
-                Err(CoreError::SegmentRangeRejected) => {
+                Err(error) if should_fallback_to_single_after_segment_error(&error) => {
+                    tracing::warn!(
+                        download_id = id,
+                        url = %record.url,
+                        %error,
+                        "segmented mode failed; falling back to single connection"
+                    );
                     storage
                         .replace_segments_async(&record.id, Vec::new())
                         .await?;
@@ -193,6 +220,13 @@ impl HttpDownloader {
 
         let response = request.send().await?;
         let status = response.status();
+        tracing::debug!(
+            download_id = id,
+            url = %record.url,
+            resume_offset,
+            status = %status,
+            "received single download response"
+        );
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
             return Err(CoreError::NeedsRefresh);
         }
@@ -363,32 +397,48 @@ impl HttpDownloader {
     async fn probe(&self, url: &str) -> Result<ProbeResult, CoreError> {
         let response = match self.client.head(url).send().await {
             Ok(response) => response,
-            Err(_) => return Ok(ProbeResult::default()),
+            Err(error) => {
+                tracing::debug!(url = %url, %error, "HEAD probe failed, falling back to default probe");
+                return Ok(ProbeResult::default());
+            }
         };
+
+        tracing::debug!(url = %url, status = %response.status(), "HEAD probe response received");
 
         if matches!(
             response.status(),
             StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
         ) {
+            tracing::debug!(url = %url, status = %response.status(), "HEAD probe unsupported, falling back to default probe");
             return Ok(ProbeResult::default());
         }
         if matches!(
             response.status(),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
         ) {
-            return Err(CoreError::NeedsRefresh);
+            tracing::debug!(url = %url, status = %response.status(), "HEAD probe forbidden, falling back to GET-based download handling");
+            return Ok(ProbeResult::default());
         }
         if !response.status().is_success() {
+            tracing::debug!(url = %url, status = %response.status(), "HEAD probe returned non-success status, using default probe");
             return Ok(ProbeResult::default());
         }
 
         let headers = response.headers();
-        Ok(ProbeResult {
+        let probe = ProbeResult {
             total_size: header_to_string(headers, CONTENT_LENGTH)
                 .and_then(|value| value.parse().ok()),
             etag: header_to_string(headers, ETAG),
             last_modified: header_to_string(headers, LAST_MODIFIED),
-        })
+        };
+        tracing::debug!(
+            url = %url,
+            total_size = ?probe.total_size,
+            etag = ?probe.etag,
+            last_modified = ?probe.last_modified,
+            "HEAD probe parsed"
+        );
+        Ok(probe)
     }
 
     async fn range_probe(&self, url: &str) -> Result<Option<u64>, CoreError> {
@@ -398,18 +448,27 @@ impl HttpDownloader {
             .header(RANGE, "bytes=0-0")
             .send()
             .await?;
+        tracing::debug!(url = %url, status = %response.status(), "range probe response received");
         if matches!(
             response.status(),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
         ) {
+            tracing::debug!(url = %url, status = %response.status(), "range probe requires refreshed capture");
             return Err(CoreError::NeedsRefresh);
         }
         if response.status() != StatusCode::PARTIAL_CONTENT {
+            tracing::debug!(url = %url, status = %response.status(), "range probe did not return partial content");
             return Ok(None);
         }
 
-        Ok(parse_content_range_total(response.headers()))
+        let total = parse_content_range_total(response.headers());
+        tracing::debug!(url = %url, total_size = ?total, "range probe accepted segmented download");
+        Ok(total)
     }
+}
+
+fn should_fallback_to_single_after_segment_error(error: &CoreError) -> bool {
+    matches!(error, CoreError::SegmentRangeRejected) || error.is_transient()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -499,10 +558,18 @@ async fn download_segment_attempt(
         .await?;
 
     let response = client
-        .get(url)
+        .get(&url)
         .header(RANGE, format!("bytes={start_byte}-{}", segment.end_byte))
         .send()
         .await?;
+    tracing::debug!(
+        segment_id = %segment.id,
+        url = %url,
+        start_byte,
+        end_byte = segment.end_byte,
+        status = %response.status(),
+        "segment response received"
+    );
     match response.status() {
         StatusCode::PARTIAL_CONTENT => {}
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {

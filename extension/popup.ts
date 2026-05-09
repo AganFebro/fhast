@@ -46,13 +46,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (status.enabled) {
       autoGrabToggle.textContent = "Disable Auto-Grab";
       autoGrabToggle.className = "btn-danger";
-      autoGrabStatus.textContent = "Auto-grab active — watching for downloads";
+      autoGrabStatus.textContent =
+        "Auto-grab active on all websites — watching for downloads.";
       autoGrabStatus.className = "auto-grab-active";
     } else {
       autoGrabToggle.textContent = "Enable Auto-Grab";
       autoGrabToggle.className = "btn-toggle";
       autoGrabStatus.textContent =
-        "Auto-grab off. Toggle to intercept browser downloads.";
+        "Auto-grab off. Turn it on to intercept downloads on all websites.";
       autoGrabStatus.className = "auto-grab-inactive";
     }
   }

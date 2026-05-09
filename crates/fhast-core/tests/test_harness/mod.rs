@@ -17,6 +17,7 @@ pub enum ServerMode {
     IgnoreRange,
     FirstRangeOnlyThenIgnore,
     RangeWithSegmentFailure { fail_request_index: usize },
+    RangeProbeOnlyThen503,
     Slow { read_delay_ms: u64 },
     ForbiddenAfterN { n: usize },
     ConnectionReset,
@@ -206,6 +207,39 @@ fn handle_connection(mut stream: TcpStream, mode: &ServerMode, requests: &Atomic
                     format!("Content-Range: bytes {start}-{bounded_end}/{}", data.len()),
                 ],
                 Some(body),
+            );
+        }
+        ServerMode::RangeProbeOnlyThen503 => {
+            let Some((start, end)) = range else {
+                write_response(
+                    &mut stream,
+                    "200 OK",
+                    &[content_length_header(DATA_LEN)],
+                    Some(&test_data()),
+                );
+                return;
+            };
+
+            if start == 0 && end == 0 {
+                let data = test_data();
+                let body = &data[0..=0];
+                write_response(
+                    &mut stream,
+                    "206 Partial Content",
+                    &[
+                        format!("Content-Length: {}", body.len()),
+                        format!("Content-Range: bytes 0-0/{}", data.len()),
+                    ],
+                    Some(body),
+                );
+                return;
+            }
+
+            write_response(
+                &mut stream,
+                "503 Service Unavailable",
+                &["Content-Length: 0".to_owned()],
+                None,
             );
         }
         ServerMode::ChangedData {

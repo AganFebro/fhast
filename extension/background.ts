@@ -16,6 +16,8 @@ interface CachedRequest {
   contentDispositionFilename?: string;
   timestamp: number;
   parentUrl?: string;
+  requestMethod?: string;
+  originalRequestMethod?: string;
 }
 
 const HEADER_CACHE_TTL_MS = 120_000;
@@ -32,7 +34,7 @@ const sensitiveHeaderNames = new Set([
 const headerCache = new Map<string, CachedRequest>();
 const redirectMap = new Map<string, string>();
 
-let autoGrabEnabled = false;
+let autoGrabEnabled = true;
 let webRequestInstalled = false;
 let downloadsObserverInstalled = false;
 
@@ -58,25 +60,29 @@ function pruneDownloads(): void {
   }
 }
 
+installAutoGrabListeners();
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "fhast-capture-link",
     title: "Send link to fhast",
     contexts: ["link"],
   });
-  initAutoGrabState();
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  initAutoGrabState();
 });
 
 async function initAutoGrabState(): Promise<void> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.AUTO_GRAB_ENABLED);
-  autoGrabEnabled = result[STORAGE_KEYS.AUTO_GRAB_ENABLED] === true;
-  if (autoGrabEnabled) {
-    installAutoGrabListeners();
+  const storedState = result[STORAGE_KEYS.AUTO_GRAB_ENABLED];
+
+  if (typeof storedState === "boolean") {
+    autoGrabEnabled = storedState;
+    return;
   }
+
+  autoGrabEnabled = true;
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.AUTO_GRAB_ENABLED]: true,
+  });
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -124,6 +130,10 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   }
 });
 
+void initAutoGrabState().catch((error) => {
+  console.error("fhast: failed to restore auto-grab state", error);
+});
+
 function hasDownloadsPermission(): boolean {
   return chrome.downloads !== undefined;
 }
@@ -136,13 +146,11 @@ async function enableAutoGrab(): Promise<{
   success: boolean;
   error?: string;
 }> {
-  const granted = await chrome.permissions.request({
-    permissions: ["downloads", "webRequest"],
-    origins: ["<all_urls>"],
-  });
-
-  if (!granted) {
-    return { success: false, error: "Permission denied" };
+  if (!hasDownloadsPermission() || !hasWebRequestPermission()) {
+    return {
+      success: false,
+      error: "Extension permissions are missing. Reload the extension and try again.",
+    };
   }
 
   autoGrabEnabled = true;
@@ -150,7 +158,6 @@ async function enableAutoGrab(): Promise<{
     [STORAGE_KEYS.AUTO_GRAB_ENABLED]: true,
   });
 
-  installAutoGrabListeners();
   return { success: true };
 }
 
@@ -159,7 +166,7 @@ async function disableAutoGrab(): Promise<void> {
   await chrome.storage.local.set({
     [STORAGE_KEYS.AUTO_GRAB_ENABLED]: false,
   });
-  removeAutoGrabListeners();
+  clearAutoGrabSession();
 }
 
 function installAutoGrabListeners(): void {
@@ -189,45 +196,203 @@ function installAutoGrabListeners(): void {
   }
 }
 
-function removeAutoGrabListeners(): void {
-  if (webRequestInstalled && hasWebRequestPermission()) {
-    chrome.webRequest.onBeforeSendHeaders.removeListener(onBeforeSendHeaders);
-    chrome.webRequest.onBeforeRedirect.removeListener(onBeforeRedirect);
-    chrome.webRequest.onHeadersReceived.removeListener(onHeadersReceived);
-    webRequestInstalled = false;
-  }
-
-  if (downloadsObserverInstalled && hasDownloadsPermission()) {
-    chrome.downloads.onDeterminingFilename.removeListener(
-      onDeterminingFilename,
-    );
-    chrome.downloads.onCreated.removeListener(onDownloadCreated);
-    downloadsObserverInstalled = false;
-  }
-
+function clearAutoGrabSession(): void {
   headerCache.clear();
   redirectMap.clear();
+  recentDownloads.clear();
+}
+
+function sanitizeSensitiveHeadersForReplay(
+  sensitiveHeaders: Record<string, string> | undefined,
+  stripCookies: boolean,
+): Record<string, string> | undefined {
+  if (!sensitiveHeaders) {
+    return undefined;
+  }
+
+  if (!stripCookies) {
+    return sensitiveHeaders;
+  }
+
+  const filtered = Object.fromEntries(
+    Object.entries(sensitiveHeaders).filter(
+      ([name]) => name.toLowerCase() !== "cookie",
+    ),
+  );
+
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
+function preserveSyntheticHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) =>
+      name.toLowerCase().startsWith("x-fhast-"),
+    ),
+  );
+}
+
+function isReplayableOriginalMethod(method: string | undefined): boolean {
+  if (!method) {
+    return true;
+  }
+
+  const normalized = method.toUpperCase();
+  return normalized === "GET" || normalized === "HEAD";
+}
+
+function getHeaderValue(
+  headers: Record<string, string> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+
+  const match = Object.entries(headers).find(
+    ([headerName]) => headerName.toLowerCase() === name.toLowerCase(),
+  );
+
+  return match?.[1];
+}
+
+function sanitizeHeadersForReplay(
+  headers: Record<string, string> | undefined,
+  stripReferer: boolean,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+
+  if (!stripReferer) {
+    return headers;
+  }
+
+  const filtered = Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => name.toLowerCase() !== "referer",
+    ),
+  );
+
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
+function shouldStripRefererForOriginalReplay(
+  cached: CachedRequest | null | undefined,
+  downloadUrl: string,
+  usingRedirectMetadata: boolean,
+  shouldUseRedirectedUrl: boolean,
+): boolean {
+  if (!cached?.parentUrl || !usingRedirectMetadata || shouldUseRedirectedUrl) {
+    return false;
+  }
+
+  if (cached.parentUrl !== downloadUrl) {
+    return false;
+  }
+
+  const referer = getHeaderValue(cached.headers, "referer");
+  return !referer || !referer.includes(downloadUrl);
+}
+
+async function replayRedirectFailure(
+  details: chrome.webRequest.WebResponseHeadersDetails,
+  cached: CachedRequest,
+): Promise<void> {
+  if (!cached.parentUrl) {
+    return;
+  }
+
+  if (details.type !== "main_frame") {
+    return;
+  }
+
+  if (details.statusCode !== 403 && details.statusCode !== 410) {
+    return;
+  }
+
+  const referer = getHeaderValue(cached.headers, "referer");
+  if (referer?.includes(cached.parentUrl)) {
+    return;
+  }
+
+  if (isDuplicateDownload(cached.parentUrl)) {
+    return;
+  }
+
+  const replayHeaders = sanitizeHeadersForReplay(cached.headers, true);
+  const replaySensitiveHeaders = sanitizeSensitiveHeadersForReplay(
+    cached.sensitiveHeaders,
+    true,
+  );
+  const hasCookies =
+    replaySensitiveHeaders !== undefined &&
+    Object.keys(replaySensitiveHeaders).some(
+      (name) => name.toLowerCase() === "cookie",
+    );
+  const filename =
+    cached.contentDispositionFilename ??
+    getHeaderValue(cached.headers, "x-fhast-filename-hint");
+
+  console.warn(
+    "fhast: redirected request failed before download, replaying original URL",
+    details.statusCode,
+    details.url,
+    "->",
+    cached.parentUrl,
+  );
+
+  const message: AddDownloadMessage = {
+    type: "add_download",
+    version: VERSION,
+    url: cached.parentUrl,
+    page_url: referer,
+    filename_hint: filename,
+    headers: replayHeaders,
+    sensitive_headers: replaySensitiveHeaders,
+    response_headers: cached.responseHeaders,
+  };
+
+  const grabEvent: AutoGrabEvent = {
+    url: cached.parentUrl,
+    filename,
+    pageUrl: referer,
+    headers: replayHeaders,
+    sensitiveHeaders: replaySensitiveHeaders,
+    responseHeaders: cached.responseHeaders,
+    hasCookies,
+    parentUrl: cached.parentUrl,
+    capturedAt: new Date().toISOString(),
+  };
+
+  await storeCapture(grabEvent);
+  sendToNativeHost(message);
 }
 
 function onBeforeSendHeaders(
   details: chrome.webRequest.WebRequestHeadersDetails,
 ): void {
+  if (!autoGrabEnabled) return;
+
   const existing = headerCache.get(details.url);
   const parsed = parseHeaders(details.requestHeaders ?? []);
-
-  const mergedSensitive =
-    existing?.parentUrl && Object.keys(existing.sensitiveHeaders).length > 0
-      ? { ...existing.sensitiveHeaders, ...parsed.sensitive }
-      : parsed.sensitive;
+  const preservedHeaders = preserveSyntheticHeaders(existing?.headers);
 
   const cacheEntry: CachedRequest = {
     url: details.url,
-    headers: { ...(existing?.headers ?? {}), ...parsed.normal },
-    sensitiveHeaders: mergedSensitive,
+    headers: { ...preservedHeaders, ...parsed.normal },
+    sensitiveHeaders: parsed.sensitive,
     responseHeaders: existing?.responseHeaders ?? {},
     contentDispositionFilename: existing?.contentDispositionFilename,
     timestamp: Date.now(),
     parentUrl: existing?.parentUrl,
+    requestMethod: details.method,
+    originalRequestMethod: existing?.originalRequestMethod ?? details.method,
   };
 
   headerCache.set(details.url, cacheEntry);
@@ -237,6 +402,8 @@ function onBeforeSendHeaders(
 function onHeadersReceived(
   details: chrome.webRequest.WebResponseHeadersDetails,
 ): void {
+  if (!autoGrabEnabled) return;
+
   const responseHeaders: Record<string, string> = {};
   let cdFilename: string | undefined;
 
@@ -280,6 +447,7 @@ function onHeadersReceived(
   }
 
   headerCache.set(details.url, meta);
+  void replayRedirectFailure(details, meta);
 }
 
 function parseContentDispositionFilename(header: string): string | undefined {
@@ -298,17 +466,21 @@ function parseContentDispositionFilename(header: string): string | undefined {
 function onBeforeRedirect(
   details: chrome.webRequest.WebRedirectionResponseDetails,
 ): void {
+  if (!autoGrabEnabled) return;
+
   const source = headerCache.get(details.url);
   if (!source) return;
 
   const target: CachedRequest = {
     url: details.redirectUrl,
-    headers: { ...source.headers },
-    sensitiveHeaders: { ...source.sensitiveHeaders },
+    headers: { ...preserveSyntheticHeaders(source.headers) },
+    sensitiveHeaders: {},
     responseHeaders: { ...source.responseHeaders },
     contentDispositionFilename: source.contentDispositionFilename,
     timestamp: Date.now(),
     parentUrl: details.url,
+    requestMethod: undefined,
+    originalRequestMethod: source.originalRequestMethod,
   };
 
   headerCache.set(details.redirectUrl, target);
@@ -386,6 +558,7 @@ async function handleGrabbedDownload(
     let cached = lookupCachedHeaders(downloadItem.url);
     let redirectedTargetUrl: string | null = null;
     let usingRedirectMetadata = false;
+    let originalSourceUrl = downloadItem.url;
 
     const redirectedTo = redirectMap.get(downloadItem.url);
     if (redirectedTo) {
@@ -395,10 +568,18 @@ async function handleGrabbedDownload(
         redirectedTargetUrl = redirectedTo;
         usingRedirectMetadata = true;
       }
+    } else if (cached?.parentUrl) {
+      originalSourceUrl = cached.parentUrl;
+      redirectedTargetUrl = downloadItem.url;
+      usingRedirectMetadata = true;
     }
 
     if (!cached && downloadItem.referrer) {
       cached = lookupCachedHeaders(downloadItem.referrer);
+    }
+
+    if (cached?.parentUrl) {
+      originalSourceUrl = cached.parentUrl;
     }
 
     const cdFilename = cached?.contentDispositionFilename;
@@ -420,16 +601,46 @@ async function handleGrabbedDownload(
       downloadItem.filename?.split("/").pop() ??
       candidate?.filename;
     const sensitiveHeaderCount = Object.keys(cached?.sensitiveHeaders ?? {}).length;
+    const shouldForceRedirectedUrl =
+      usingRedirectMetadata &&
+      redirectedTargetUrl !== null &&
+      !isReplayableOriginalMethod(cached?.originalRequestMethod);
+    const shouldUseOriginalUrl =
+      !shouldForceRedirectedUrl &&
+      (usingRedirectMetadata ||
+        originalSourceUrl !== downloadItem.url ||
+        sensitiveHeaderCount > 0);
     const shouldUseRedirectedUrl =
-      redirectedTargetUrl !== null && sensitiveHeaderCount === 0;
+      redirectedTargetUrl !== null &&
+      (shouldForceRedirectedUrl ||
+        (!usingRedirectMetadata && !shouldUseOriginalUrl));
     const downloadUrl =
       shouldUseRedirectedUrl && redirectedTargetUrl !== null
         ? redirectedTargetUrl
-        : downloadItem.url;
+        : originalSourceUrl;
+    const shouldStripReplayCookies =
+      usingRedirectMetadata &&
+      !shouldUseRedirectedUrl &&
+      cached?.parentUrl === downloadUrl;
+    const shouldStripReplayReferer = shouldStripRefererForOriginalReplay(
+      cached,
+      downloadUrl,
+      usingRedirectMetadata,
+      shouldUseRedirectedUrl,
+    );
+    const replayHeaders = sanitizeHeadersForReplay(
+      cached?.headers,
+      shouldStripReplayReferer,
+    );
+
+    const replaySensitiveHeaders = sanitizeSensitiveHeadersForReplay(
+      cached?.sensitiveHeaders,
+      shouldStripReplayCookies,
+    );
 
     const hasCookies =
-      cached?.sensitiveHeaders &&
-      Object.keys(cached.sensitiveHeaders).some(
+      replaySensitiveHeaders &&
+      Object.keys(replaySensitiveHeaders).some(
         (k) => k.toLowerCase() === "cookie",
       );
 
@@ -437,7 +648,7 @@ async function handleGrabbedDownload(
       "fhast: grabbed",
       filename ?? downloadUrl.slice(-40),
       "|",
-      cached ? Object.keys(cached.headers).length : 0,
+      replayHeaders ? Object.keys(replayHeaders).length : 0,
       "headers |",
       hasCookies ? "WITH cookies" : "NO cookies",
       "|",
@@ -447,14 +658,18 @@ async function handleGrabbedDownload(
         ? `redirect from ${new URL(cached.parentUrl).hostname}`
         : "direct",
       "|",
+      cached?.originalRequestMethod ?? "GET",
+      "origin method |",
       shouldUseRedirectedUrl
         ? "using redirected URL"
-        : usingRedirectMetadata
+        : shouldUseOriginalUrl && usingRedirectMetadata
           ? "using original URL + redirected headers"
           : "using original URL",
       "|",
       sensitiveHeaderCount,
       "sensitive headers",
+      shouldStripReplayReferer ? "| stripped replay referer" : "",
+      shouldStripReplayCookies ? "| stripped replay cookies" : "",
     );
 
     const message: AddDownloadMessage = {
@@ -463,8 +678,8 @@ async function handleGrabbedDownload(
       url: downloadUrl,
       page_url: downloadItem.referrer ?? undefined,
       filename_hint: filename,
-      headers: cached?.headers,
-      sensitive_headers: cached?.sensitiveHeaders,
+      headers: replayHeaders,
+      sensitive_headers: replaySensitiveHeaders,
       response_headers: cached?.responseHeaders,
     };
 
@@ -474,8 +689,8 @@ async function handleGrabbedDownload(
       mime: downloadItem.mime ?? undefined,
       fileSize: downloadItem.fileSize ?? undefined,
       pageUrl: downloadItem.referrer ?? undefined,
-      headers: cached?.headers,
-      sensitiveHeaders: cached?.sensitiveHeaders,
+      headers: replayHeaders,
+      sensitiveHeaders: replaySensitiveHeaders,
       responseHeaders: cached?.responseHeaders,
       hasCookies,
       parentUrl: cached?.parentUrl,

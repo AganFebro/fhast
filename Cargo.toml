@@ -3,6 +3,7 @@ members = [
   "crates/fhast-cli",
   "crates/fhast-core",
   "crates/fhast-daemon",
+  "crates/fhast-gui",
   "crates/fhast-ipc",
   "crates/fhast-native-host",
   "crates/fhast-tui",
@@ -19,7 +20,7 @@ publish = false
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
-reqwest = { version = "0.12", features = ["stream", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["cookies", "stream", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

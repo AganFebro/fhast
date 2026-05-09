@@ -79,7 +79,7 @@ Prefix the scope with the crate or area:
 **Common issues**:
 - **NO cookies** in log: ensure `"extraHeaders"` is in webRequest listener extraInfoSpec
 - **Headers 0 in TUI**: restart daemon after `cargo build`, ensure download ID matches
-- **302 error after auto-grab**: check the `fhast: grabbed ...` URL mode. Cookie/auth-backed redirects should keep the original URL; plain redirects can use the redirected URL.
+- **410/403 after auto-grab redirect**: check the `fhast: grabbed ...` URL mode. Redirect-chain captures should keep the original URL and reuse redirected headers, otherwise one-shot or referer-protected final URLs can fail after Chrome already reached them.
 - **Service worker status 15**: add `"type": "module"` to manifest background config
 
 ## Code Style

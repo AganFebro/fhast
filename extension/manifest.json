@@ -3,9 +3,15 @@
   "name": "fhast Link Grabber",
   "version": "0.1.0",
   "description": "Send download links from Chrome to fhast download manager",
-  "permissions": ["contextMenus", "nativeMessaging", "activeTab", "storage"],
-  "optional_permissions": ["downloads", "webRequest", "cookies"],
-  "optional_host_permissions": ["<all_urls>"],
+  "permissions": [
+    "contextMenus",
+    "nativeMessaging",
+    "activeTab",
+    "storage",
+    "downloads",
+    "webRequest"
+  ],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "dist/background.js",
     "type": "module"
