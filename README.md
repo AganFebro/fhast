@@ -1,5 +1,7 @@
 # fhast
 
+![fhast banner](img/banner_1.png)
+
 fhast is a Rust download manager with a Windows desktop app, a terminal UI, and a command-line interface. On Windows, most users should open the GUI app and let it manage the background helper programs automatically.
 
 ## Quick Start - Windows
