@@ -31,6 +31,8 @@ sudo apt update
 sudo apt install pkg-config libgtk-3-dev libappindicator3-dev libxdo-dev
 ```
 
+Running the Linux GUI also requires a desktop display session, such as WSLg on Windows 11 or a normal Linux desktop.
+
 Build the Chrome extension from the `extension/` folder:
 
 ```powershell
