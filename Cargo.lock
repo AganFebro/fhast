@@ -1132,6 +1132,7 @@ dependencies = [
  "egui",
  "fhast-core",
  "fhast-ipc",
+ "gtk",
  "serde",
  "serde_json",
  "tokio",

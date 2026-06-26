@@ -22,6 +22,8 @@ mod imp {
 
     impl TrayController {
         pub fn new(ctx: &Context) -> Result<Self> {
+            init_platform_tray()?;
+
             let tray_menu = Menu::new();
             let show_item = MenuItem::with_id(
                 tray_icon::menu::MenuId::new("show"),
@@ -97,6 +99,21 @@ mod imp {
         pub fn poll_command(&self) -> Option<TrayCommand> {
             self.command_rx.try_recv().ok()
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn init_platform_tray() -> Result<()> {
+        use anyhow::Context as _;
+
+        if !gtk::is_initialized() {
+            gtk::init().context("gtk initialization failed")?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn init_platform_tray() -> Result<()> {
+        Ok(())
     }
 
     fn tray_icon() -> Result<Icon> {

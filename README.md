@@ -28,7 +28,7 @@ If you want to build the full workspace including the Linux GUI, install the req
 
 ```bash
 sudo apt update
-sudo apt install pkg-config libgtk-3-dev libappindicator3-dev
+sudo apt install pkg-config libgtk-3-dev libappindicator3-dev libxdo-dev
 ```
 
 Build the Chrome extension from the `extension/` folder:
