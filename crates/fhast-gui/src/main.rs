@@ -18,7 +18,6 @@ use ipc_client::{AddDownloadCommand, AutoGrabStatus, DetailData, Snapshot};
 use tokio::runtime::Runtime;
 
 use crate::daemon::DaemonManager;
-#[cfg(windows)]
 use crate::tray::{TrayCommand, TrayController};
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
@@ -92,9 +91,7 @@ struct FhastGuiApp {
     show_details: bool,
     show_close_prompt: bool,
     pending_remove: Option<String>,
-    #[cfg(windows)]
     tray: Option<TrayController>,
-    #[cfg(windows)]
     tray_error: Option<String>,
     exit_requested: bool,
 }
@@ -354,14 +351,11 @@ impl FhastGuiApp {
         let (tx, rx) = mpsc::channel();
         let config = load_config_file().unwrap_or_default();
         let config_path = config_path().ok();
-        #[cfg(windows)]
         let tray_result = TrayController::new(&cc.egui_ctx);
-        #[cfg(windows)]
         let tray_error = tray_result
             .as_ref()
             .err()
             .map(|error| format!("system tray unavailable: {error}"));
-        #[cfg(windows)]
         let tray = tray_result.ok();
 
         Ok(Self {
@@ -397,9 +391,7 @@ impl FhastGuiApp {
             show_details: false,
             show_close_prompt: false,
             pending_remove: None,
-            #[cfg(windows)]
             tray,
-            #[cfg(windows)]
             tray_error,
             exit_requested: false,
         })
