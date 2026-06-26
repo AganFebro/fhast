@@ -4,6 +4,30 @@
 
 fhast is a Rust download manager with a Windows desktop app, a terminal UI, and a command-line interface. On Windows, most users should open the GUI app and let it manage the background helper programs automatically.
 
+## Build from Source
+
+Build fhast with Cargo from the repository root:
+
+```powershell
+cargo build
+```
+
+Create optimized Windows/Linux executables with:
+
+```powershell
+cargo build --release
+```
+
+Build the Chrome extension from the `extension/` folder:
+
+```powershell
+cd extension
+npm install
+npm run build
+```
+
+After building the extension, load the `extension/` folder at `chrome://extensions/` with Developer mode enabled.
+
 ## Quick Start - Windows
 
 Build or unpack a Windows release, then open the folder that contains these files:
@@ -26,7 +50,7 @@ Simple Windows flow:
 
 Keep `fhast-daemon.exe` and `fhast-native-host.exe` in the same folder as `fhast-gui.exe`. They are helper programs used by the GUI; users do not need to open them manually.
 
-If you built from source with Cargo, create the release executables with:
+If you built from source, create the release executables with:
 
 ```powershell
 cargo build --release
@@ -40,7 +64,7 @@ For browser integration, load the Chrome extension, then open **Extension** in t
 
 ```bash
 # Build
-cargo build
+cargo build --release
 
 # Start the daemon
 cargo run -p fhast-cli -- daemon start
@@ -53,14 +77,6 @@ cargo run -p fhast-cli -- tui
 
 # Stop the daemon
 cargo run -p fhast-cli -- daemon stop
-```
-
-Or use the convenience build scripts:
-
-```bash
-./scripts/build.sh            # Full build (Rust + extension)
-./scripts/build-rust.sh       # Rust only (build, test, clippy, fmt)
-./scripts/build-extension.sh  # Extension only (typescript, lint, format)
 ```
 
 ## Commands
