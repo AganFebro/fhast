@@ -20,4 +20,5 @@ eframe = { version = "0.31", default-features = false, features = ["glow", "defa
 tray-icon = "0.20"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.31", default-features = false, features = ["x11", "wayland"] }
 tray-icon = { version = "0.20", features = ["default"] }

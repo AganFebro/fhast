@@ -12,10 +12,23 @@ Build fhast with Cargo from the repository root:
 cargo build
 ```
 
-Create optimized Windows/Linux executables with:
+Create optimized executables with:
 
 ```powershell
 cargo build --release
+```
+
+On Linux or WSL, the full workspace build includes the desktop GUI crate. If you only need the daemon, CLI, TUI, and native host, build those packages directly to avoid Linux GUI system dependencies:
+
+```bash
+cargo build --release -p fhast-cli -p fhast-daemon -p fhast-tui -p fhast-native-host
+```
+
+If you want to build the full workspace including the Linux GUI, install the required desktop development packages first. On Ubuntu or Debian WSL, start with:
+
+```bash
+sudo apt update
+sudo apt install pkg-config libgtk-3-dev libappindicator3-dev
 ```
 
 Build the Chrome extension from the `extension/` folder:
